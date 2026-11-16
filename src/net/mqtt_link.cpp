@@ -81,10 +81,7 @@ bool MqttLink::startConnect() {
 
 void MqttLink::loop(bool wifiUp) {
   const uint32_t now = millis();
-  if (acks_.take(telemetryId_)) {
-    session_.acked(now);
-    telemetryId_ = 0;
-  }
+  if (pending_.reconcile(acks_)) session_.acked(now);
 
   switch (session_.poll(now, wifiUp, client_.connected(), client_.disconnected(), rand01k())) {
     case MqttSession::Action::None:
@@ -97,7 +94,7 @@ void MqttLink::loop(bool wifiUp) {
       if (!client_.disconnected()) client_.disconnect(true);
       client_.clearQueue(true);
       acks_.clear();
-      telemetryId_ = 0;
+      pending_.clear();
       Serial.printf("[mqtt] disconnected: %s, discarded %u queued packet(s)\n",
                     espMqttClientTypes::disconnectReasonToString(
                         static_cast<espMqttClientTypes::DisconnectReason>(disconnectReason_.load())),
@@ -139,16 +136,30 @@ bool MqttLink::publishTelemetry(const Reading& r, uint32_t uptimeMs, OptI rssi) 
     session_.skipped();
     return false;
   }
-  telemetryId_ = id;
+  pending_.add(id);
   session_.handedOff();
   return true;
 }
 
+void MqttLink::publishOfflineTask(void* arg) {
+  auto* self = static_cast<MqttLink*>(arg);
+  self->offlineId_ = self->client_.publish(self->statusTopic_, 1, true, kOffline);
+  self->offlinePublished_ = true;
+  vTaskDelete(nullptr);
+}
+
 void MqttLink::goOffline() {
   const uint32_t start = millis();
-  if (client_.connected()) {
-    const uint16_t id = client_.publish(statusTopic_, 1, true, kOffline);
-    while (id != 0 && !acks_.take(id) && millis() - start < kGoOfflineMs) delay(10);
+  // publish() waits forever for the client's semaphore, which its task holds through a
+  // blocking socket write (up to ~10 s under TCP backpressure), so it runs in a helper task
+  // and only the wait here is bounded. If the task cannot start, the will still says offline.
+  offlinePublished_ = false;
+  if (client_.connected() &&
+      xTaskCreate(publishOfflineTask, "mqtt_offline", 3072, this, 1, nullptr) == pdPASS) {
+    while (millis() - start < kGoOfflineMs) {
+      if (offlinePublished_ && (offlineId_ == 0 || acks_.take(offlineId_))) break;
+      delay(10);
+    }
   }
   client_.disconnect(true);
   while (!client_.disconnected() && millis() - start < kGoOfflineMs) delay(10);

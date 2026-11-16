@@ -5,6 +5,7 @@
 
 using olvar::AckLog;
 using olvar::MqttSession;
+using olvar::PendingAcks;
 using Action = MqttSession::Action;
 using State = MqttSession::State;
 
@@ -248,6 +249,54 @@ static void test_ack_log_keeps_the_last_slots_and_clears() {
   TEST_ASSERT_FALSE(log.take(4));
 }
 
+static void test_acks_slower_than_the_interval_still_feed_the_supervisor() {
+  MqttSession s(0);
+  AckLog log;
+  PendingAcks pending;
+  bringUp(s, 0);
+  uint16_t id = 0;
+  for (uint32_t now = 0; now < 3 * MqttSession::kSupervisorMs; now += 60000) {
+    if (now > 0) log.record(id);  // ack for the previous message, after the next is due
+    if (pending.reconcile(log)) s.acked(now);
+    TEST_ASSERT_NOT_EQUAL(Action::Restart, s.poll(now, true, true, false, kMid));
+    TEST_ASSERT_TRUE(publish(s) >= 0);
+    pending.add(++id);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(1, pending.size());
+  }
+}
+
+static void test_pending_acks_track_several_outstanding_ids() {
+  AckLog log;
+  PendingAcks pending;
+  pending.add(1);
+  pending.add(2);
+  pending.add(3);
+  TEST_ASSERT_FALSE(pending.reconcile(log));
+  log.record(2);
+  log.record(99);
+  TEST_ASSERT_TRUE(pending.reconcile(log));
+  TEST_ASSERT_EQUAL_UINT32(2, pending.size());
+  TEST_ASSERT_FALSE(pending.reconcile(log));
+  log.record(1);
+  log.record(3);
+  TEST_ASSERT_TRUE(pending.reconcile(log));
+  TEST_ASSERT_EQUAL_UINT32(0, pending.size());
+}
+
+static void test_pending_acks_drop_the_oldest_when_full_and_clear() {
+  AckLog log;
+  PendingAcks pending;
+  for (uint16_t id = 1; id <= PendingAcks::kSlots + 1; ++id) pending.add(id);
+  TEST_ASSERT_EQUAL_UINT32(PendingAcks::kSlots, pending.size());
+  log.record(1);
+  TEST_ASSERT_FALSE(pending.reconcile(log));
+  log.record(PendingAcks::kSlots + 1);
+  TEST_ASSERT_TRUE(pending.reconcile(log));
+  pending.add(0);
+  pending.clear();
+  TEST_ASSERT_EQUAL_UINT32(0, pending.size());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_first_connect_waits_for_wifi);
@@ -268,5 +317,8 @@ int main(int, char**) {
   RUN_TEST(test_ack_recorded_before_id_is_known_is_kept);
   RUN_TEST(test_ack_log_ignores_unknown_and_zero_ids);
   RUN_TEST(test_ack_log_keeps_the_last_slots_and_clears);
+  RUN_TEST(test_acks_slower_than_the_interval_still_feed_the_supervisor);
+  RUN_TEST(test_pending_acks_track_several_outstanding_ids);
+  RUN_TEST(test_pending_acks_drop_the_oldest_when_full_and_clear);
   return UNITY_END();
 }

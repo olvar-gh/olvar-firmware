@@ -4,6 +4,7 @@
 // can include this header (they build without ARDUINO). MqttLink binds them to espMqttClient.
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <atomic>
@@ -132,6 +133,45 @@ class AckLog {
   std::atomic<uint8_t> next_{0};
 };
 
+// Telemetry packet ids still waiting for a PUBACK, owned by the loop thread. Several can be
+// outstanding when acks are slower than the publish interval; the oldest is dropped when full.
+class PendingAcks {
+ public:
+  static constexpr uint8_t kSlots = 8;
+
+  void add(uint16_t id) {
+    if (id == 0) return;
+    ids_[next_] = id;
+    next_ = static_cast<uint8_t>((next_ + 1) % kSlots);
+  }
+
+  // True if the log holds an ack for any pending id; those ids stop being pending.
+  bool reconcile(AckLog& log) {
+    bool any = false;
+    for (uint16_t& id : ids_) {
+      if (id != 0 && log.take(id)) {
+        id = 0;
+        any = true;
+      }
+    }
+    return any;
+  }
+
+  size_t size() const {
+    size_t n = 0;
+    for (uint16_t id : ids_) n += id != 0;
+    return n;
+  }
+
+  void clear() {
+    for (uint16_t& id : ids_) id = 0;
+  }
+
+ private:
+  uint16_t ids_[kSlots] = {};
+  uint8_t next_ = 0;
+};
+
 }  // namespace olvar
 
 #ifdef ARDUINO
@@ -169,7 +209,9 @@ class MqttLink {
   // QoS 1, not retained. Returns false (and counts the interval as skipped, without using a
   // seq) when not connected; nothing is ever queued while disconnected.
   bool publishTelemetry(const Reading& r, uint32_t uptimeMs, OptI rssi);
-  // Publishes retained `offline`, waits up to kGoOfflineMs for its ack, then disconnects.
+  // Publishes retained `offline`, waits for its ack, then disconnects, all within
+  // kGoOfflineMs. Only for use right before a restart: on timeout a helper task may still be
+  // blocked inside the client.
   void goOffline();
 
   bool connected() const { return session_.canPublish(); }
@@ -192,8 +234,12 @@ class MqttLink {
   char statusTopic_[64] = {};
   char payload_[320] = {};
   bool mdnsStarted_ = false;
+  static void publishOfflineTask(void* arg);
+
   AckLog acks_;
-  uint16_t telemetryId_ = 0;
+  PendingAcks pending_;
+  std::atomic<uint16_t> offlineId_{0};
+  std::atomic<bool> offlinePublished_{false};
   std::atomic<uint8_t> disconnectReason_{0};
 };
 
