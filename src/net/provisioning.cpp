@@ -1,0 +1,350 @@
+#include "provisioning.h"
+
+#include <ctype.h>
+#include <stdio.h>
+#include <string.h>
+
+namespace olvar {
+
+namespace {
+
+const char kPasswordAlphabet[] = "abcdefghijkmnpqrstuvwxyz23456789";
+
+void trimmed(const char* in, const char** begin, size_t* len) {
+  if (!in) in = "";
+  while (*in && isspace(static_cast<unsigned char>(*in))) ++in;
+  size_t n = strlen(in);
+  while (n && isspace(static_cast<unsigned char>(in[n - 1]))) --n;
+  *begin = in;
+  *len = n;
+}
+
+bool fail(const char** err, const char* msg) {
+  if (err) *err = msg;
+  return false;
+}
+
+bool hostCharsOk(const char* host) {
+  for (; *host; ++host) {
+    const char c = *host;
+    if (!isalnum(static_cast<unsigned char>(c)) && c != '.' && c != '-') return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+void apSsid(const uint8_t mac[6], char out[kApSsidSize]) {
+  snprintf(out, kApSsidSize, "olvar-setup-%02x%02x%02x", mac[3], mac[4], mac[5]);
+}
+
+void apPasswordFromRandom(uint32_t r0, uint32_t r1, char out[kApPasswordSize]) {
+  uint64_t bits = (static_cast<uint64_t>(r1) << 32) | r0;
+  for (size_t i = 0; i < kApPasswordSize - 1; ++i) {
+    out[i] = kPasswordAlphabet[bits & 31];
+    bits >>= 5;
+  }
+  out[kApPasswordSize - 1] = '\0';
+}
+
+bool shouldOpenPortal(bool hasWifiCredentials, bool portalFlag, bool settingsValid) {
+  return !hasWifiCredentials || portalFlag || !settingsValid;
+}
+
+bool settingsFromForm(const PortalForm& form, const Settings& current, Settings& out, const char** err) {
+  Settings s;
+  const char* p;
+  size_t n;
+
+  trimmed(form.device_id, &p, &n);
+  if (n >= sizeof(s.device_id)) {
+    return fail(err, "device_id must be 3-32 chars of a-z, 0-9 or '-', starting with a letter or digit");
+  }
+  for (size_t i = 0; i < n; ++i) s.device_id[i] = static_cast<char>(tolower(static_cast<unsigned char>(p[i])));
+  s.device_id[n] = '\0';
+
+  trimmed(form.mqtt_host, &p, &n);
+  if (n >= sizeof(s.mqtt_host)) return fail(err, "MQTT host must be at most 63 chars");
+  memcpy(s.mqtt_host, p, n);
+  s.mqtt_host[n] = '\0';
+  if (!hostCharsOk(s.mqtt_host)) return fail(err, "MQTT host must be a host name or IP address");
+
+  trimmed(form.mqtt_port, &p, &n);
+  uint32_t port = 0;
+  for (size_t i = 0; i < n; ++i) {
+    if (!isdigit(static_cast<unsigned char>(p[i])) || port > 65535) return fail(err, "MQTT port must be 1-65535");
+    port = port * 10 + static_cast<uint32_t>(p[i] - '0');
+  }
+  if (n == 0 || port == 0 || port > 65535) return fail(err, "MQTT port must be 1-65535");
+  s.mqtt_port = static_cast<uint16_t>(port);
+
+  const char* pass = form.mqtt_pass ? form.mqtt_pass : "";
+  if (!pass[0]) pass = current.mqtt_pass;
+  if (strnlen(pass, sizeof(s.mqtt_pass)) >= sizeof(s.mqtt_pass)) {
+    return fail(err, "MQTT password must be at most 64 chars");
+  }
+  strcpy(s.mqtt_pass, pass);
+
+  if (!validate(s, err)) return false;
+  out = s;
+  return true;
+}
+
+SubmitAction submitAction(bool formValid, bool wifiSubmitted, bool hasWifiCredentials) {
+  if (!formValid) return SubmitAction::Reject;
+  if (wifiSubmitted) return SubmitAction::JoinWifi;
+  return hasWifiCredentials ? SubmitAction::SaveNow : SubmitAction::NeedWifi;
+}
+
+PortalStep portalStep(bool joinPending, bool joinedNewWifi, bool portalActive) {
+  if (joinedNewWifi) return joinPending ? PortalStep::Save : PortalStep::Reopen;
+  if (joinPending) return PortalStep::WifiFailed;
+  return portalActive ? PortalStep::Wait : PortalStep::Closed;
+}
+
+PortalStep afterSaveFailed(bool joinedNewWifi) {
+  return joinedNewWifi ? PortalStep::Reopen : PortalStep::Wait;
+}
+
+bool safeForHtmlAttr(const char* s) {
+  return s && !strpbrk(s, "'\"<>&");
+}
+
+const char* redisplayValue(const char* submitted, const char* fallback) {
+  if (safeForHtmlAttr(submitted)) return submitted;
+  return safeForHtmlAttr(fallback) ? fallback : "";
+}
+
+bool portalExpired(uint32_t lastActivityMs, uint32_t nowMs) {
+  return nowMs - lastActivityMs >= kPortalTimeoutMs;
+}
+
+bool bootNormallyAfterTimeout(bool hasWifiCredentials, const Settings& current) {
+  return hasWifiCredentials && validate(current, nullptr);
+}
+
+bool LongPressDetector::update(bool pressed, uint32_t nowMs) {
+  if (!started_ || pressed != raw_) {
+    started_ = true;
+    raw_ = pressed;
+    rawSinceMs_ = nowMs;
+  }
+  if (nowMs - rawSinceMs_ < kButtonDebounceMs) return false;
+  if (raw_) {
+    if (!stable_) {
+      stable_ = true;
+      pressedAtMs_ = rawSinceMs_;
+    }
+    return false;
+  }
+  // A press already in progress at the first poll has an unknown start, so it never counts.
+  const bool fired = stable_ && armed_ && rawSinceMs_ - pressedAtMs_ >= kLongPressMs;
+  stable_ = false;
+  armed_ = true;
+  return fired;
+}
+
+}  // namespace olvar
+
+#ifdef ARDUINO
+#include <WiFi.h>
+#include <esp_mac.h>
+#include <esp_random.h>
+#include <esp_wifi.h>
+
+#include "pins.h"
+
+namespace olvar {
+
+bool hasWifiCredentials() {
+  if (WiFi.getMode() == WIFI_MODE_NULL) WiFi.mode(WIFI_STA);
+  wifi_config_t conf = {};
+  if (esp_wifi_get_config(WIFI_IF_STA, &conf) != ESP_OK) return false;
+  return conf.sta.ssid[0] != 0;
+}
+
+void BootButton::begin() { pinMode(pins::kBoot, INPUT_PULLUP); }
+
+bool BootButton::poll() { return detector_.update(digitalRead(pins::kBoot) == LOW, millis()); }
+
+bool Provisioning::needed(const Settings& current) {
+  return shouldOpenPortal(hasWifiCredentials(), store_.portalRequested(), validate(current, nullptr));
+}
+
+void Provisioning::resetFields(const Settings& shown) {
+  snprintf(portText_, sizeof(portText_), "%u", shown.mqtt_port);
+  devId_->setValue(redisplayValue(shown.device_id, current_.device_id), devId_->getValueLength());
+  host_->setValue(redisplayValue(shown.mqtt_host, current_.mqtt_host), host_->getValueLength());
+  port_->setValue(portText_, port_->getValueLength());
+  pass_->setValue("", pass_->getValueLength());
+}
+
+void Provisioning::rejectSubmit(const char* reason) {
+  snprintf(banner_, sizeof(banner_), "<p style='color:#c00'>Not saved: %s.</p>", reason);
+  Serial.printf("[portal] not saved: %s\n", reason);
+  wm_.server->sendHeader("Location", "/wifi");
+  wm_.server->send(303, "text/plain", "");
+}
+
+void Provisioning::onSubmit(bool fromWifiPage) {
+  const String id = wm_.server->arg(devId_->getID());
+  const String host = wm_.server->arg(host_->getID());
+  const String port = wm_.server->arg(port_->getID());
+  const String pass = wm_.server->arg(pass_->getID());
+  const PortalForm form{id.c_str(), host.c_str(), port.c_str(), pass.c_str()};
+  const char* err = nullptr;
+  const bool valid = settingsFromForm(form, current_, pending_, &err);
+  // WiFiManager also joins when only a password is posted, reusing the saved network name.
+  const bool wifiSubmitted =
+      fromWifiPage && (wm_.server->arg("s").length() > 0 || wm_.server->arg("p").length() > 0);
+
+  Settings shown = current_;
+  if (valid) {
+    shown = pending_;
+  } else {
+    snprintf(shown.device_id, sizeof(shown.device_id), "%s", redisplayValue(id.c_str(), current_.device_id));
+    snprintf(shown.mqtt_host, sizeof(shown.mqtt_host), "%s", redisplayValue(host.c_str(), current_.mqtt_host));
+  }
+
+  switch (submitAction(valid, wifiSubmitted, valid && hasWifiCredentials())) {
+    case SubmitAction::Reject:
+      resetFields(shown);
+      rejectSubmit(err);
+      return;
+    case SubmitAction::NeedWifi:
+      resetFields(shown);
+      rejectSubmit("choose a Wi-Fi network");
+      return;
+    case SubmitAction::SaveNow: {
+      resetFields(shown);
+      if (!store_.save(pending_, &err)) {
+        rejectSubmit(err ? err : "unknown error");
+        return;
+      }
+      store_.setPortalRequested(false);
+      banner_[0] = '\0';
+      char page[256];
+      snprintf(page, sizeof(page),
+               "<!DOCTYPE html><meta name='viewport' content='width=device-width'>"
+               "<p>Saved. The board is restarting as %s.</p>",
+               pending_.device_id);
+      wm_.server->send(200, "text/html", page);
+      Serial.printf("[portal] saved; restarting as %s\n", pending_.device_id);
+      restartPending_ = true;
+      restartAtMs_ = millis();
+      return;
+    }
+    case SubmitAction::JoinWifi:
+      banner_[0] = '\0';
+      joinPending_ = true;
+      wm_.forwardWifiSave();
+      // forwardWifiSave() copied the raw submitted values back into the fields.
+      resetFields(shown);
+      return;
+  }
+}
+
+void Provisioning::restartAfterTimeout(const char* why) {
+  const bool normal = bootNormallyAfterTimeout(hasWifiCredentials(), current_);
+  store_.setPortalRequested(!normal);
+  Serial.printf("[portal] %s; restarting into %s\n", why, normal ? "normal mode" : "the portal");
+  delay(500);
+  ESP.restart();
+  for (;;) {
+  }
+}
+
+void Provisioning::run(const Settings& current) {
+  current_ = current;
+  // Keep the flag set while the portal is open, so a power cut mid-setup reopens it.
+  store_.setPortalRequested(true);
+
+  uint8_t mac[6];
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
+  char ssid[kApSsidSize];
+  char pass[kApPasswordSize];
+  apSsid(mac, ssid);
+  apPasswordFromRandom(esp_random(), esp_random(), pass);
+  Serial.printf("[portal] device_id %s\n", current.device_id);
+  Serial.printf("[portal] join Wi-Fi \"%s\" with password \"%s\", then open http://192.168.4.1\n", ssid, pass);
+
+  static WiFiManagerParameter banner(banner_);
+  devId_ = new WiFiManagerParameter("dev_id", "Device id (MQTT username)", "", 32);
+  host_ = new WiFiManagerParameter("mq_host", "MQTT host (gateway IP or name)", "", 63);
+  port_ = new WiFiManagerParameter("mq_port", "MQTT port", "", 5, "inputmode='numeric'");
+  pass_ = new WiFiManagerParameter("mq_pass", "MQTT password", "", 64,
+                                   current.mqtt_pass[0] ? "type='password' placeholder='(unchanged)'"
+                                                        : "type='password'");
+  resetFields(current);
+  wm_.addParameter(&banner);
+  wm_.addParameter(devId_);
+  wm_.addParameter(host_);
+  wm_.addParameter(port_);
+  wm_.addParameter(pass_);
+  // Called before WiFiManager adds its routes, and the first matching route wins.
+  wm_.setWebServerCallback([this] {
+    wm_.server->on("/wifisave", [this] { onSubmit(true); });
+    wm_.server->on("/paramsave", [this] { onSubmit(false); });
+  });
+  std::vector<const char*> menu = {"wifi", "info", "restart"};
+  wm_.setMenu(menu);
+  wm_.setTitle("Olvar setup");
+  wm_.setShowInfoUpdate(false);
+  wm_.setShowInfoErase(false);
+  wm_.setConnectTimeout(20);
+  wm_.setConfigPortalBlocking(false);
+  wm_.startConfigPortal(ssid, pass);
+
+  uint32_t lastActivity = millis();
+  for (;;) {
+    const bool joined = wm_.process();
+    const uint32_t now = millis();
+    if (WiFi.softAPgetStationNum() > 0) lastActivity = now;
+
+    if (restartPending_) {
+      // Give the "Saved" page time to reach the phone before the AP goes away.
+      if (now - restartAtMs_ >= 1000) ESP.restart();
+      delay(5);
+      continue;
+    }
+
+    switch (portalStep(joinPending_, joined, wm_.getConfigPortalActive())) {
+      case PortalStep::Save: {
+        const char* err = nullptr;
+        if (store_.save(pending_, &err)) {
+          store_.setPortalRequested(false);
+          Serial.printf("[portal] saved; restarting as %s\n", pending_.device_id);
+          delay(500);
+          ESP.restart();
+        }
+        Serial.printf("[portal] save failed: %s\n", err ? err : "unknown error");
+        if (afterSaveFailed(joined) == PortalStep::Reopen) {
+          delay(500);
+          ESP.restart();
+        }
+        break;
+      }
+      case PortalStep::WifiFailed:
+        snprintf(banner_, sizeof(banner_), "<p style='color:#c00'>Could not join that Wi-Fi network. "
+                                           "Check its name and password.</p>");
+        Serial.println("[portal] could not join the submitted Wi-Fi network");
+        joinPending_ = false;
+        break;
+      case PortalStep::Reopen:
+        Serial.println("[portal] Wi-Fi joined without settings to save; reopening the portal");
+        delay(500);
+        ESP.restart();
+        break;
+      case PortalStep::Closed:
+        restartAfterTimeout("portal closed");
+      case PortalStep::Wait:
+        break;
+    }
+
+    if (portalExpired(lastActivity, now)) restartAfterTimeout("timed out");
+    delay(5);
+  }
+}
+
+}  // namespace olvar
+#endif  // ARDUINO
