@@ -166,17 +166,14 @@ SerialCli::SerialCli(Stream& io, Sht31Sensor& sht, Bh1750Sensor& bh, SoilSensor&
 void SerialCli::begin() { io_.println("Type 'help' for commands."); }
 
 void SerialCli::poll() {
-  // Bounded so a flood of input can't starve the rest of loop().
-  for (int budget = 128; budget > 0 && io_.available() > 0; --budget) {
-    int c = io_.read();
-    if (c < 0) break;
-    if (!reader_.push(static_cast<char>(c))) continue;
+  if (reader_.pump(io_, kMaxBytesPerPoll)) {
     if (reader_.overflowed()) {
       io_.printf("Line too long (max %u chars), ignored.\n", static_cast<unsigned>(LineReader::kMaxLen));
-      continue;
+    } else if (check_.active()) {
+      handleSoilCheckLine(reader_.line());
+    } else {
+      handleLine(reader_.line());
     }
-    if (check_.active()) handleSoilCheckLine(reader_.line());
-    else handleLine(reader_.line());
   }
   if (check_.sampleDue(millis())) stepSoilCheck();
 }

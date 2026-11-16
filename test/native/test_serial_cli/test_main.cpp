@@ -58,6 +58,38 @@ static void test_line_reader_overflow() {
   TEST_ASSERT_EQUAL_STRING("status", last);
 }
 
+struct FakeSource {
+  const char* data;
+  size_t pos = 0;
+  int available() const { return static_cast<int>(strlen(data) - pos); }
+  int read() { return data[pos] ? data[pos++] : -1; }
+};
+
+static void test_pump_stops_after_one_line() {
+  LineReader r;
+  FakeSource src{"raw\nraw\r\nstatus\n"};
+  TEST_ASSERT_TRUE(r.pump(src, 128));
+  TEST_ASSERT_EQUAL_STRING("raw", r.line());
+  TEST_ASSERT_EQUAL_size_t(4, src.pos);
+  TEST_ASSERT_TRUE(r.pump(src, 128));
+  TEST_ASSERT_EQUAL_STRING("raw", r.line());
+  TEST_ASSERT_TRUE(r.pump(src, 128));
+  TEST_ASSERT_EQUAL_STRING("status", r.line());
+  TEST_ASSERT_FALSE(r.pump(src, 128));
+}
+
+static void test_pump_respects_byte_budget() {
+  LineReader r;
+  FakeSource src{"status\n"};
+  TEST_ASSERT_FALSE(r.pump(src, 3));
+  TEST_ASSERT_EQUAL_size_t(3, src.pos);
+  TEST_ASSERT_FALSE(r.pump(src, 3));
+  TEST_ASSERT_EQUAL_size_t(6, src.pos);
+  TEST_ASSERT_TRUE(r.pump(src, 3));
+  TEST_ASSERT_FALSE(r.overflowed());
+  TEST_ASSERT_EQUAL_STRING("status", r.line());
+}
+
 static OptI ok(int32_t v) { return OptI{true, v}; }
 
 template <typename F>
@@ -169,6 +201,8 @@ int main() {
   RUN_TEST(test_line_reader_line_endings);
   RUN_TEST(test_line_reader_empty_enter_counts_once);
   RUN_TEST(test_line_reader_overflow);
+  RUN_TEST(test_pump_stops_after_one_line);
+  RUN_TEST(test_pump_respects_byte_budget);
   RUN_TEST(test_soilcheck_good_sensor);
   RUN_TEST(test_soilcheck_slow_settle_boundary);
   RUN_TEST(test_soilcheck_still_drifting_never_settles);

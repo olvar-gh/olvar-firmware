@@ -20,6 +20,8 @@ class LedPattern {
     since_ = nowMs;
   }
   LedMode mode() const { return mode_; }
+  // Restarts the current blink with the LED on; setMode() to the same mode keeps the phase.
+  void restart(uint32_t nowMs) { since_ = nowMs; }
 
   void flash(uint32_t nowMs) {
     flashing_ = true;

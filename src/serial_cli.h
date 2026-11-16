@@ -21,6 +21,19 @@ class LineReader {
   const char* line() const { return buf_; }
   bool overflowed() const { return overflow_; }
 
+  // Reads up to maxBytes from src (anything with available() and read()) and stops at the
+  // first completed line, so one poll() never runs more than one command: commands like
+  // `raw` block for ~260 ms each and a burst of them must not stall loop().
+  template <typename Src>
+  bool pump(Src& src, int maxBytes) {
+    for (; maxBytes > 0 && src.available() > 0; --maxBytes) {
+      int c = src.read();
+      if (c < 0) return false;
+      if (push(static_cast<char>(c))) return true;
+    }
+    return false;
+  }
+
  private:
   char buf_[kMaxLen + 1] = {};
   size_t len_ = 0;
@@ -106,12 +119,13 @@ struct CliHooks {
 class SerialCli {
  public:
   static constexpr uint32_t kBaud = 115200;
+  static constexpr int kMaxBytesPerPoll = 128;
 
   SerialCli(Stream& io, Sht31Sensor& sht, Bh1750Sensor& bh, SoilSensor& soil, CliHooks hooks);
 
   // Expects the port to be open already: Serial.begin(SerialCli::kBaud).
   void begin();
-  // Call every loop(). Takes at most one soil sample (~65 ms) per call during soilcheck.
+  // Call every loop(). Runs at most one command and one soilcheck sample (~65 ms) per call.
   void poll();
   bool soilCheckActive() const { return check_.active(); }
 

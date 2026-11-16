@@ -11,7 +11,7 @@ StatusLed::StatusLed(uint8_t pin, bool activeHigh) : pin_(pin), activeHigh_(acti
 void StatusLed::begin() {
   pinMode(pin_, OUTPUT);
   write(false);
-  pattern_.setMode(pattern_.mode(), millis());
+  pattern_.restart(millis());
 }
 
 void StatusLed::setMode(LedMode mode) { pattern_.setMode(mode, millis()); }

@@ -57,6 +57,14 @@ static void test_blink_survives_millis_wraparound() {
   TEST_ASSERT_TRUE(p.isOn(0x00000010u));
 }
 
+static void test_restart_starts_blink_on_regardless_of_uptime() {
+  LedPattern p;
+  TEST_ASSERT_FALSE(p.isOn(3500));
+  p.restart(3500);
+  TEST_ASSERT_TRUE(p.isOn(3500));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LedMode::NoWifi), static_cast<int>(p.mode()));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_no_wifi_blinks_slowly);
@@ -64,5 +72,6 @@ int main() {
   RUN_TEST(test_online_is_dark_except_short_flash);
   RUN_TEST(test_mode_change_restarts_phase_and_same_mode_does_not);
   RUN_TEST(test_blink_survives_millis_wraparound);
+  RUN_TEST(test_restart_starts_blink_on_regardless_of_uptime);
   return UNITY_END();
 }
