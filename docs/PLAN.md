@@ -124,7 +124,7 @@ The chat Edge Function belongs to olvar-gateway and has no firmware impact.
 | Broker address | Host string; `.local` names resolve via `MDNS.queryHost()`. **DHCP reservation for the Pi recommended.** | mDNS only: unreliable on some routers. |
 | MQTT security | LAN, port 1883, username+password per device, **no TLS** (decision F) | TLS: out of v1. |
 | Timestamps / buffering | No wall-clock time on the device; the gateway stamps on receipt. **Readings are dropped while the broker is unreachable** (decision C). | ESP32 ring buffer + replay: replayed readings would get wrong gateway stamps. |
-| Telemetry QoS | **QoS 1, not retained** (decision C). On disconnect the firmware discards any unacknowledged telemetry rather than resending it later, so a late resend can't get a stale gateway timestamp. T6 must verify espMqttClient's outbox behaviour and clear it on disconnect if needed. | QoS 0: rejected by the final contract. |
+| Telemetry QoS | **QoS 1, not retained** (decision C). On disconnect the firmware discards any unacknowledged telemetry rather than resending it later, so a late resend can't get a stale gateway timestamp. T6 must verify espMqttClient's outbox behaviour and clear it on disconnect if needed. While still connected, the client may legitimately retransmit a QoS 1 message whose PUBACK is late (default 10 s timeout), so the broker can deliver the same `(boot_id, seq)` twice. That's normal QoS 1 at-least-once delivery; the gateway's dedup keeps one stored reading. | QoS 0: rejected by the final contract. |
 | `boot_id` | 8 lowercase hex chars from `esp_random()`, generated once per boot after Wi-Fi starts (hardware RNG) | MAC- or counter-based ids: not random; an NVS boot counter wears flash for no benefit. |
 | Soil sampling | Sensor powered from 3V3 all the time. 64 samples ~1 ms apart: sort, drop the lowest and highest 16, average the middle 32. Report the 12-bit count. 100 nF on the pin. | Power from a GPIO: a board with the R4 defect then needs long settling. `analogReadMilliVolts`: the contract field is a raw count. |
 | Soil calibration | **None in firmware** (decision D). Dry/wet values live in the database and are set from the dashboard. | Serial `cal` commands / NVS calibration (earlier draft): removed. |
@@ -151,7 +151,7 @@ The user's **FINAL contract** replaces the provisional one. Below is the firmwar
   |---|---|---|
   | `device_id` | string | default `olvar-` + last 3 MAC bytes as 6 lowercase hex; overridable in the portal. **Must match the gateway rule `^[a-z0-9][a-z0-9-]{2,31}$`** (3–32 chars, first char a letter or digit), and **`olvar-gateway` is reserved**. Equals the topic segment, the MQTT client id and the MQTT username. |
   | `boot_id` | string | 8 lowercase hex chars, random per boot |
-  | `seq` | uint32 | 0 at boot, +1 for each message handed to the MQTT client. Strictly increasing and **never reused**. Gaps are possible when an in-flight QoS 1 message is discarded on disconnect. Intervals skipped while already disconnected don't use a number. |
+  | `seq` | uint32 | 0 at boot, +1 for each message handed to the MQTT client. Strictly increasing and **never reused for a different reading**. A subscriber may see the *same* message (identical payload, same `seq`) more than once because of QoS 1 retransmission; the gateway dedups on `(device_id, boot_id, seq)`. Gaps are possible when an in-flight QoS 1 message is discarded on disconnect. Intervals skipped while already disconnected don't use a number. |
   | `uptime_ms` | uint32 | `millis()`, wraps after ~49.7 days |
   | `temperature_c`, `humidity_pct` | number \| null | 2 dp; `null` on read/CRC failure |
   | `lux` | number \| null | 1 dp; `null` on failure |
@@ -420,7 +420,7 @@ No hardware. Post the fixture and simulator paths in notes for the gateway worke
 - Unplug the ESP32. Within about 1.5× keepalive, status changes to `offline`.
 - Stop Mosquitto for 2 min, then start it again. Check that:
   - the device reconnects without a reboot (`boot_id` unchanged);
-  - `seq` keeps **strictly increasing** and is never repeated. Gaps are allowed only for messages discarded in flight (e.g. 42 → 44 when 43 was unacknowledged at the moment the broker stopped). The gap is at most the number of in-flight messages, normally ≤1, so it's always far smaller than the number of skipped intervals;
+  - the **distinct** `seq` values keep increasing; no `seq` ever carries two different payloads. Exact duplicates of one message (same `seq`, identical payload) from QoS 1 retransmission are allowed. Gaps are allowed only for messages discarded in flight (e.g. 42 → 44 when 43 was unacknowledged at the moment the broker stopped). The gap is at most the number of in-flight messages, normally ≤1, so it's always far smaller than the number of skipped intervals;
   - dropped readings are verified **only** by the pause in arrivals (no message for ~2 min at the subscriber) and by `skipped` ≥ 1 in the serial `status` output (roughly 2 for a 2-minute outage), **not** by consecutive or gapped `seq` values;
   - no old reading arrives late: the first message after reconnect is a fresh sample, received within one interval of the reconnect.
 - After a reset, `boot_id` changes and `seq` restarts at 0.
@@ -454,7 +454,11 @@ No hardware. Post the fixture and simulator paths in notes for the gateway worke
 - The full native test suite passes and CI is green.
 
 **Verify:**
-- 24 h soak with the Pi, logging `mosquitto_sub` to a file. Expect ≥99 % of the expected 1440 messages, no unplanned reboot (`boot_id` constant) and no duplicate `(boot_id, seq)`.
+- 24 h soak with the Pi, logging `mosquitto_sub` to a file. Count **unique** `(boot_id, seq)` keys, not raw lines, and expect:
+  - ≥99 % of the expected 1440 unique keys;
+  - no unplanned reboot (`boot_id` constant);
+  - transport-level duplicates allowed only if the payload is byte-identical (a repeated key with a different payload is a failure);
+  - the gateway's `readings` table has exactly **one row per key**: `select boot_id, seq, count(*) from readings where device_id = … group by 1,2 having count(*) > 1` returns no rows.
 - Unplug the SHT31 VIN mid-run and check for `null` and then recovery.
 - Cross-repo: the gateway inserts the messages, and the dashboard calibration screen shows live `soil_raw`.
 
@@ -567,6 +571,7 @@ The final decisions answer the earlier questions (board, Wi-Fi, OTA, soil scale,
 | Temperature reads high because the ESP32 or charger warms the SHT31 | Medium | Place it 15–20 cm away. |
 | I2C errors from breadboard jumper wires | Medium | 100 kHz, short wires, bus recovery, `null` fields |
 | QoS 1 resend after reconnect would arrive late and get a stale gateway timestamp | Low | Discard unacked telemetry on disconnect (T6). The gateway also dedupes on `(device_id, boot_id, seq)`. |
+| QoS 1 retransmit while connected (PUBACK later than 10 s) delivers a duplicate | Low | Expected at-least-once behaviour. The gateway stores the first copy (dedup key). Acceptance checks count unique keys. |
 | PlatformIO 8.0.0 is only 4 weeks old | Low–Medium | Exact pin. Fallback to pioarduino `55.03.312-1` (same core). |
 | Unencrypted MQTT on the LAN (accepted in decision F) | Low (home LAN) | Per-device credentials; broker not exposed outside the LAN |
 | USB power from the Pi browns out the ESP32 | Low | Use a separate ≥1 A charger. |
