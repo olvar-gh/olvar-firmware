@@ -48,10 +48,7 @@ bool MqttLink::begin(const Config& cfg) {
       .setKeepAlive(kKeepAliveS)
       .setWill(statusTopic_, 1, true, kOffline);
   // Runs in espMqttClient's own task: only record, loop() acts on it.
-  client_.onPublish([this](uint16_t id) {
-    if (id == telemetryId_.load()) telemetryAcked_ = true;
-    if (id == offlineId_.load()) offlineAcked_ = true;
-  });
+  client_.onPublish([this](uint16_t id) { acks_.record(id); });
   client_.onDisconnect([this](espMqttClientTypes::DisconnectReason reason) {
     disconnectReason_ = static_cast<uint8_t>(reason);
   });
@@ -84,7 +81,10 @@ bool MqttLink::startConnect() {
 
 void MqttLink::loop(bool wifiUp) {
   const uint32_t now = millis();
-  if (telemetryAcked_.exchange(false)) session_.acked(now);
+  if (acks_.take(telemetryId_)) {
+    session_.acked(now);
+    telemetryId_ = 0;
+  }
 
   switch (session_.poll(now, wifiUp, client_.connected(), client_.disconnected(), rand01k())) {
     case MqttSession::Action::None:
@@ -94,7 +94,10 @@ void MqttLink::loop(bool wifiUp) {
       break;
     case MqttSession::Action::Discard: {
       const size_t dropped = client_.queueSize();
+      if (!client_.disconnected()) client_.disconnect(true);
       client_.clearQueue(true);
+      acks_.clear();
+      telemetryId_ = 0;
       Serial.printf("[mqtt] disconnected: %s, discarded %u queued packet(s)\n",
                     espMqttClientTypes::disconnectReasonToString(
                         static_cast<espMqttClientTypes::DisconnectReason>(disconnectReason_.load())),
@@ -144,9 +147,8 @@ bool MqttLink::publishTelemetry(const Reading& r, uint32_t uptimeMs, OptI rssi) 
 void MqttLink::goOffline() {
   const uint32_t start = millis();
   if (client_.connected()) {
-    offlineAcked_ = false;
-    offlineId_ = client_.publish(statusTopic_, 1, true, kOffline);
-    while (offlineId_.load() != 0 && !offlineAcked_ && millis() - start < kGoOfflineMs) delay(10);
+    const uint16_t id = client_.publish(statusTopic_, 1, true, kOffline);
+    while (id != 0 && !acks_.take(id) && millis() - start < kGoOfflineMs) delay(10);
   }
   client_.disconnect(true);
   while (!client_.disconnected() && millis() - start < kGoOfflineMs) delay(10);

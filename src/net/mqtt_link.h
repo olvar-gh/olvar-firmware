@@ -1,10 +1,12 @@
 // MQTT link to the gateway broker (docs/PLAN.md §4.1, T6).
 //
-// MqttSession is the connection policy with no Arduino dependency, so the native tests can
-// include this header (they build without ARDUINO). MqttLink binds it to espMqttClient.
+// MqttSession (connection policy) and AckLog have no Arduino dependency, so the native tests
+// can include this header (they build without ARDUINO). MqttLink binds them to espMqttClient.
 #pragma once
 
 #include <stdint.h>
+
+#include <atomic>
 
 #include "backoff.h"
 
@@ -24,8 +26,12 @@ class MqttSession {
 
   // Called from loop() only. `connected`/`disconnected` are the client's own states; both
   // false means it is still connecting or disconnecting. rand01k feeds the backoff jitter.
+  // Discard means: drop the outbox and close the connection if the client still holds one.
   Action poll(uint32_t nowMs, bool wifiUp, bool connected, bool disconnected, uint32_t rand01k) {
     if (static_cast<uint32_t>(nowMs - lastAck_) >= kSupervisorMs) return Action::Restart;
+    // The client can report a cached `connected` until its keepalive notices the loss; a
+    // session that survived the outage would then deliver readings taken during it, late.
+    if (!wifiUp && state_ != State::Waiting) return lose(nowMs, rand01k);
     switch (state_) {
       case State::Connected:
         if (connected) {
@@ -96,14 +102,42 @@ class MqttSession {
   uint32_t connectStart_ = 0;
 };
 
+// PUBACK ids recorded by espMqttClient's task and matched on the loop thread. The ack can
+// arrive before publish() has returned the id to the caller, so it must be kept until then.
+class AckLog {
+ public:
+  static constexpr uint8_t kSlots = 8;
+
+  void record(uint16_t id) {
+    if (id == 0) return;
+    ids_[next_.fetch_add(1) % kSlots].store(id);
+  }
+
+  // True once per recorded id.
+  bool take(uint16_t id) {
+    if (id == 0) return false;
+    for (auto& slot : ids_) {
+      uint16_t expected = id;
+      if (slot.compare_exchange_strong(expected, 0)) return true;
+    }
+    return false;
+  }
+
+  void clear() {
+    for (auto& slot : ids_) slot.store(0);
+  }
+
+ private:
+  std::atomic<uint16_t> ids_[kSlots] = {};
+  std::atomic<uint8_t> next_{0};
+};
+
 }  // namespace olvar
 
 #ifdef ARDUINO
 
 #include <Arduino.h>
 #include <espMqttClient.h>
-
-#include <atomic>
 
 #include "reading.h"
 
@@ -158,10 +192,8 @@ class MqttLink {
   char statusTopic_[64] = {};
   char payload_[320] = {};
   bool mdnsStarted_ = false;
-  std::atomic<uint16_t> telemetryId_{0};
-  std::atomic<uint16_t> offlineId_{0};
-  std::atomic<bool> telemetryAcked_{false};
-  std::atomic<bool> offlineAcked_{false};
+  AckLog acks_;
+  uint16_t telemetryId_ = 0;
   std::atomic<uint8_t> disconnectReason_{0};
 };
 

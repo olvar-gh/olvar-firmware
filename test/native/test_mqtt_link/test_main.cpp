@@ -3,6 +3,7 @@
 #include "backoff.h"
 #include "../../../src/net/mqtt_link.h"
 
+using olvar::AckLog;
 using olvar::MqttSession;
 using Action = MqttSession::Action;
 using State = MqttSession::State;
@@ -196,6 +197,57 @@ static void test_timers_survive_millis_wraparound() {
   TEST_ASSERT_EQUAL(Action::Restart, s.poll(start + MqttSession::kSupervisorMs, true, true, false, kMid));
 }
 
+static void test_wifi_loss_ends_a_session_the_client_still_reports_connected() {
+  MqttSession s(0);
+  bringUp(s, 0);
+  TEST_ASSERT_EQUAL(0, publish(s));
+  TEST_ASSERT_EQUAL(Action::Discard, s.poll(100, false, true, false, kMid));
+  TEST_ASSERT_FALSE(s.canPublish());
+  TEST_ASSERT_EQUAL(-1, publish(s));
+  TEST_ASSERT_EQUAL_UINT32(1, s.skippedCount());
+
+  TEST_ASSERT_EQUAL(Action::None, s.poll(5000, true, true, false, kMid));
+  TEST_ASSERT_EQUAL(Action::None, s.poll(5001, true, false, false, kMid));
+  TEST_ASSERT_EQUAL(Action::Connect, s.poll(5002, true, false, true, kMid));
+  TEST_ASSERT_EQUAL(Action::PublishOnline, s.poll(5003, true, true, false, kMid));
+  TEST_ASSERT_EQUAL(1, publish(s));
+}
+
+static void test_wifi_loss_while_connecting_drops_the_attempt() {
+  MqttSession s(0);
+  s.poll(0, true, false, true, kMid);
+  TEST_ASSERT_EQUAL(Action::Discard, s.poll(10, false, false, false, kMid));
+  TEST_ASSERT_EQUAL(State::Waiting, s.state());
+  TEST_ASSERT_EQUAL(Action::None, s.poll(20, false, false, true, kMid));
+}
+
+static void test_ack_recorded_before_id_is_known_is_kept() {
+  AckLog log;
+  log.record(7);
+  TEST_ASSERT_TRUE(log.take(7));
+  TEST_ASSERT_FALSE(log.take(7));
+}
+
+static void test_ack_log_ignores_unknown_and_zero_ids() {
+  AckLog log;
+  log.record(0);
+  log.record(3);
+  TEST_ASSERT_FALSE(log.take(0));
+  TEST_ASSERT_FALSE(log.take(4));
+  TEST_ASSERT_TRUE(log.take(3));
+}
+
+static void test_ack_log_keeps_the_last_slots_and_clears() {
+  AckLog log;
+  for (uint16_t id = 1; id <= AckLog::kSlots + 2; ++id) log.record(id);
+  TEST_ASSERT_FALSE(log.take(1));
+  TEST_ASSERT_FALSE(log.take(2));
+  TEST_ASSERT_TRUE(log.take(3));
+  TEST_ASSERT_TRUE(log.take(AckLog::kSlots + 2));
+  log.clear();
+  TEST_ASSERT_FALSE(log.take(4));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_first_connect_waits_for_wifi);
@@ -211,5 +263,10 @@ int main(int, char**) {
   RUN_TEST(test_stuck_connect_is_aborted_once);
   RUN_TEST(test_supervisor_restarts_after_10_min_without_ack);
   RUN_TEST(test_timers_survive_millis_wraparound);
+  RUN_TEST(test_wifi_loss_ends_a_session_the_client_still_reports_connected);
+  RUN_TEST(test_wifi_loss_while_connecting_drops_the_attempt);
+  RUN_TEST(test_ack_recorded_before_id_is_known_is_kept);
+  RUN_TEST(test_ack_log_ignores_unknown_and_zero_ids);
+  RUN_TEST(test_ack_log_keeps_the_last_slots_and_clears);
   return UNITY_END();
 }
