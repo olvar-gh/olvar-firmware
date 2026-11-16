@@ -12,7 +12,9 @@ class I2cBus {
  public:
   static constexpr uint32_t kClockHz = 100000;
   static constexpr uint8_t kFailuresBeforeRecovery = 3;
-  static constexpr uint16_t kTimeoutMs = 50;  // per transaction; keeps every read < 200 ms
+  // Per transaction. A healthy 2-6 byte transfer at 100 kHz takes < 1 ms and neither sensor
+  // stretches the clock (SHT31 uses the no-stretch command), so 10 ms keeps every read < 200 ms.
+  static constexpr uint16_t kTimeoutMs = 10;
 
   explicit I2cBus(TwoWire& wire = Wire, uint8_t sda = pins::kI2cSda, uint8_t scl = pins::kI2cScl);
 

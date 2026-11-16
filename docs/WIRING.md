@@ -132,8 +132,10 @@ pio test -e esp32dev -f embedded/test_sensors -v
 |---|---|---|
 | I2C scan | devices at **0x44** (SHT31) and **0x23** (GY-302) | check SDA/SCL aren't swapped, 3V3 + GND reach both boards, ADR/ADDR not on 5 V |
 | SHT31 | 5–40 °C and 10–95 %RH | move it away from the ESP32 and charger |
-| BH1750 | lux > 0 in room light; ≤ 5 when you cover the window (the test asks you) | window covered by tape or facing the table |
-| Soil | air − water > 500 counts (the test asks you to hold it in air, then water) | run `soilcheck` above for a diagnosis |
+| BH1750 | lux > 0 in room light; ≤ 5 when you cover the window (the test tells you when) | window covered by tape or facing the table |
+| Soil | air − water > 500 counts (the test tells you when to hold it in air, then in water) | run `soilcheck` above for a diagnosis |
 
-The sensor test waits for you to press Enter in the monitor before the "covered" and
-"air/water" steps; it times out after 60 s per prompt.
+The test runner can't pass keyboard input to the board, so the hand steps are timed. Watch the
+output: when a line starts with `>>>`, do what it says before the countdown reaches 0
+(10 s to cover the light sensor, 15 s to hold the soil sensor in air, 20 s to put it in water).
+Keep the light sensor covered until the air step tells you to uncover it.
