@@ -151,7 +151,7 @@ The user's **FINAL contract** replaces the provisional one. Below is the firmwar
   |---|---|---|
   | `device_id` | string | default `olvar-` + last 3 MAC bytes as 6 lowercase hex; overridable in the portal. **Must match the gateway rule `^[a-z0-9][a-z0-9-]{2,31}$`** (3–32 chars, first char a letter or digit), and **`olvar-gateway` is reserved**. Equals the topic segment, the MQTT client id and the MQTT username. |
   | `boot_id` | string | 8 lowercase hex chars, random per boot |
-  | `seq` | uint32 | 0 at boot, +1 per telemetry message |
+  | `seq` | uint32 | 0 at boot, +1 for each message handed to the MQTT client. Strictly increasing and **never reused**. Gaps are possible when an in-flight QoS 1 message is discarded on disconnect. Intervals skipped while already disconnected don't use a number. |
   | `uptime_ms` | uint32 | `millis()`, wraps after ~49.7 days |
   | `temperature_c`, `humidity_pct` | number \| null | 2 dp; `null` on read/CRC failure |
   | `lux` | number \| null | 1 dp; `null` on failure |
@@ -405,7 +405,9 @@ No hardware. Post the fixture and simulator paths in notes for the gateway worke
 **Acceptance:**
 - STA mode with `setAutoReconnect(true)`, hostname = device_id, and disconnect reasons logged.
 - `MqttLink` sets client id = username = device_id, the password, clean session, keepalive 30 s, and the will (`status`, `offline`, QoS 1, retain). On connect it publishes retained `online`.
-- `MqttLink` keeps a `skipped` counter for intervals dropped while disconnected. T7's `status` command prints it. `seq` counts only **published** messages, per §4.1.
+- `MqttLink` keeps a `skipped` counter for intervals dropped while disconnected. T7's `status` command prints it.
+- `seq` is incremented only when `publishTelemetry()` hands a message to the client, so skipped intervals don't use a number.
+- A message discarded unacknowledged on disconnect keeps its number: `seq` is never reused, because the broker may already have received it. That leaves a gap of 1 or more.
 - `publishTelemetry()` publishes at QoS 1 and returns false when not connected; it never queues while disconnected.
 - **On disconnect, any unacked telemetry is discarded.** Check whether espMqttClient keeps its outbox across reconnects; if it does, clear it. Document the result in the code.
 - Reconnect uses `Backoff(1000, 60000)` from `loop()`, never from a callback.
@@ -418,8 +420,8 @@ No hardware. Post the fixture and simulator paths in notes for the gateway worke
 - Unplug the ESP32. Within about 1.5× keepalive, status changes to `offline`.
 - Stop Mosquitto for 2 min, then start it again. Check that:
   - the device reconnects without a reboot (`boot_id` unchanged);
-  - `seq` continues **consecutively** (e.g. 42 → 43; no gap, because dropped intervals are never published);
-  - the dropped readings show up as a gap in the subscriber's receive times (no message for ~2 min) and as `skipped` ≥ 1 in the serial `status` output;
+  - `seq` keeps **strictly increasing** and is never repeated. Gaps are allowed only for messages discarded in flight (e.g. 42 → 44 when 43 was unacknowledged at the moment the broker stopped). The gap is at most the number of in-flight messages, normally ≤1, so it's always far smaller than the number of skipped intervals;
+  - dropped readings are verified **only** by the pause in arrivals (no message for ~2 min at the subscriber) and by `skipped` ≥ 1 in the serial `status` output (roughly 2 for a 2-minute outage), **not** by consecutive or gapped `seq` values;
   - no old reading arrives late: the first message after reconnect is a fresh sample, received within one interval of the reconnect.
 - After a reset, `boot_id` changes and `seq` restarts at 0.
 
