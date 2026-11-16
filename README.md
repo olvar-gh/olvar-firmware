@@ -34,3 +34,8 @@ and stored in NVS. For dev fallbacks, copy `secrets.example.ini` to `secrets.ini
 
 The firmware version is `custom_fw_version` in `platformio.ini`; `scripts/version.py`
 appends the git short hash (e.g. `0.1.0+a1b2c3d`) as `OLVAR_FW_VERSION`.
+
+## Bring-up
+
+First time with real hardware: follow [docs/BRINGUP.md](docs/BRINGUP.md), from the wiring check to
+seeing telemetry arrive on the Pi.

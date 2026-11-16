@@ -38,6 +38,7 @@ class SettingsStore {
   static constexpr const char* kKeyMqttPort = "mq_port";
   static constexpr const char* kKeyMqttPass = "mq_pass";
   static constexpr const char* kKeyPortal = "portal";
+  static constexpr const char* kKeyStaged = "n_commit";
 
   explicit SettingsStore(KvStore& kv) : kv_(kv) {}
 
@@ -52,6 +53,13 @@ class SettingsStore {
   bool setPortalRequested(bool on);
 
  private:
+  static constexpr const char* kLiveKeys[4] = {kKeyDeviceId, kKeyMqttHost, kKeyMqttPort, kKeyMqttPass};
+  static constexpr const char* kStagedKeys[4] = {"n_dev_id", "n_mq_host", "n_mq_port", "n_mq_pass"};
+
+  bool readSet(const char* const keys[4], Settings& s);
+  bool writeSet(const char* const keys[4], const Settings& s);
+  void removeStaged();
+
   KvStore& kv_;
 };
 
