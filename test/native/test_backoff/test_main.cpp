@@ -51,6 +51,14 @@ static void test_no_overflow_near_uint32_max() {
   TEST_ASSERT_EQUAL_UINT32(0xFFFFFFFFu, b.next(500));
 }
 
+static void test_positive_jitter_saturates_near_uint32_max() {
+  Backoff b(0x80000000u, 0xFFFFFFFFu);
+  TEST_ASSERT_EQUAL_UINT32(0x80000000u, b.next(500));
+  TEST_ASSERT_EQUAL_UINT32(0xFFFFFFFFu, b.next(1000));  // 1.2 * max would wrap without saturation
+  TEST_ASSERT_EQUAL_UINT32(0xFFFFFFFFu, b.next(999));
+  TEST_ASSERT_EQUAL_UINT32(0xCCCCCCCCu, b.next(0));     // negative jitter still applies
+}
+
 static void test_timer_first_call_fires_then_every_period() {
   IntervalTimer t(60000);
   TEST_ASSERT_TRUE(t.due(5));
@@ -87,6 +95,7 @@ int main(int, char**) {
   RUN_TEST(test_every_jittered_value_in_range);
   RUN_TEST(test_reset_returns_to_min);
   RUN_TEST(test_no_overflow_near_uint32_max);
+  RUN_TEST(test_positive_jitter_saturates_near_uint32_max);
   RUN_TEST(test_timer_first_call_fires_then_every_period);
   RUN_TEST(test_timer_handles_millis_wraparound);
   RUN_TEST(test_timer_restart_does_not_fire);
