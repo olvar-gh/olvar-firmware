@@ -13,7 +13,9 @@ Research date: 2026-11-16. Every non-obvious claim links to its source.
 - **Hardware (confirmed):** a 38-pin ESP32-WROOM-32D dev board on an expansion board with a 3.3 V/5 V jumper, plus a breadboard. Normal 2.4 GHz home Wi-Fi with no login page.
 - **Libraries:** `RobTillaart/SHT31` (temperature/humidity), `claws/BH1750` (light), `bertmelis/espMqttClient` (MQTT 3.1.1, last will), `bblanchon/ArduinoJson` 7 (payload), `tzapu/WiFiManager` (first-time Wi-Fi + MQTT settings portal). `Preferences` (NVS) comes with the core.
 - **Pins:** I2C bus on **GPIO21 (SDA) / GPIO22 (SCL)**, shared by SHT31 @ 0x44 and BH1750 @ 0x23, all at 3.3 V. Capacitive soil sensor on **GPIO34 (ADC1_CH6)**, because ADC2 can't be used while Wi-Fi is on. Add a **100 nF ceramic capacitor** from GPIO34 to GND.
-- **Soil sensor:** check the board before use. It needs a **662K regulator**, a **TLC555** (not an NE555) and **R4 (1 MΩ) connected to GND**.
+- **Soil sensor:** the user's sensor is the generic 98×23 mm "Capacitive Soil Moisture Sensor" (AliExpress 1005005202930632). The seller's manual says 3.3–5.5 V supply, built-in regulator, 0–3.0 V output; it doesn't name a version (§2.3). Cheap boards often ship with defects, so instead of a chip/multimeter inspection the plan uses:
+  - a **safe default wiring**: VCC on **3V3**, never 5 V;
+  - a **serial sanity check** (`soilcheck`, §7.3) that compares the raw reading in air and in a glass of water.
   - The firmware sends only `soil_raw`: the 12-bit ADC count, trimmed mean of 64 samples, higher = drier.
   - **The firmware has no calibration logic and doesn't send `soil_pct`.** Calibration lives in the database and is set from the dashboard's Soil calibration screen.
 - **Telemetry:** every **60 s** on `olvar/v1/<device_id>/telemetry`, **QoS 1**.
@@ -63,6 +65,10 @@ Research date: 2026-11-16. Every non-obvious claim links to its source.
 | Test without power. Read the 662K and TLC555 markings, then meter AOUT↔GND, which should be about 1 MΩ. The printed version number doesn't tell you the quality. | https://github.com/OrangePeachPink/sprout/blob/main/docs/user/trust-your-sensor.md |
 | The LDO needs headroom. Some boards combine the LDO with an NE555, and those can't work at all. v2.0 boards can be noisy. | https://miltschek.de/article_2022-06-26_Soil+Moisture+Sensors.html |
 | Output is **inverse**: dry gives a high voltage, wet a low one. At 3.3 V, typical readings are about 3.0 V in air and about 1.5 V in water. Calibrate every unit. Insert only up to the marked line. | https://tinkered.ai/components/capacitive-soil-moisture-v12 |
+| Another vendor's datasheet for the same design gives about 2.5 V in dry air and about 1.0 V submerged, and ~5 mA supply current. Typical values vary by about ±0.5 V between boards. | https://shillehtek.com/blogs/shillehtek-product-manuals/capacitive-soil-moisture-sensor-v1-2-manual |
+| An unconnected ESP32 ADC pin reads random values. | https://docs.espressif.com/projects/esp-idf/en/release-v4.4/esp32/api-reference/peripherals/adc.html |
+| **The user's listing** (AliExpress item 1005005202930632, store "SZHJW Technology Store", brand SZYTF). The title is "Capacitive Soil Moisture Sensor Corrosion Resistant". Specs only say "Analog Sensor"; neither the title nor the specs name v1.2 or v2.0. The attached manual says: "built-in voltage regulator chip", **3.3–5.5 V DC**, **output 0–3.0 V DC**, PH2.0-3P connector, 97×23×7 mm, 12 g, cable included. It doesn't say which timer chip is fitted. | https://www.aliexpress.com/item/1005005202930632.html , manual: https://ae-pic-a1.aliexpress-media.com/kf/S414c8fb7db6841a2be3a7ec722b00fd5W.pdf |
+| **Conclusion for this model:** it's the common 98×23 mm DFRobot-SEN0193-style board, sold as "v1.2" or "v2.0" depending on the batch. The seller claims a regulator, but the defects above are batch-dependent and the listing can't rule them out. So: power at 3.3 V, which is safe even if the regulator is missing, and confirm it works with the software check in §7.3. | (inference from the two rows above and §2.3 sources) |
 
 ### 2.4 Libraries
 | Finding | Source |
@@ -113,7 +119,7 @@ The chat Edge Function belongs to olvar-gateway and has no firmware impact.
 | BH1750 driver | `claws/BH1750 @ 1.3.0`, `ONE_TIME_HIGH_RES_MODE` | `hp_BH1750`: fine, less common. Continuous mode: no benefit at 60 s. |
 | MQTT client | `bertmelis/espMqttClient @ 1.7.3`, sync client over `WiFiClient` | **PubSubClient**: unmaintained. **arduino-mqtt**: blocking `loop()`, small buffers. **ESP32MQTTClient**: hides reconnect logic. |
 | JSON | `bblanchon/ArduinoJson @ 7.4.3` | Hand-written `snprintf`: error-prone with `null`. |
-| Provisioning | **WiFiManager captive portal** on first boot, or when BOOT (GPIO0) is long-pressed (≥3 s) **while the firmware is running**. The long-press sets an NVS flag and reboots into the portal. Holding GPIO0 low *during reset* would enter ROM download mode instead, because GPIO0 is a strapping pin. Portal fields: MQTT host, port, user, password, device_id. | Hard-coded `secrets.h`: credentials end up in the binary and need a rebuild for every change (kept only as gitignored dev defaults). Espressif WiFiProv/BLE: needs the Espressif app and can't collect MQTT fields. |
+| Provisioning | **WiFiManager captive portal** on first boot, or when BOOT (GPIO0) is long-pressed (≥3 s) **while the firmware is running**. The long-press sets an NVS flag and reboots into the portal. Holding GPIO0 low *during reset* would enter ROM download mode instead, because GPIO0 is a strapping pin. Portal fields: device_id, MQTT host, port, password. **The MQTT username is always the device_id**, because the gateway's broker ACL requires username == client id == device_id. | Hard-coded `secrets.h`: credentials end up in the binary and need a rebuild for every change (kept only as gitignored dev defaults). Espressif WiFiProv/BLE: needs the Espressif app and can't collect MQTT fields. |
 | Settings storage | `Preferences` namespace `olvar`. Wi-Fi credentials stay in the Wi-Fi driver's own NVS store, written by WiFiManager. | LittleFS JSON: more code. EEPROM emulation: legacy. |
 | Broker address | Host string; `.local` names resolve via `MDNS.queryHost()`. **DHCP reservation for the Pi recommended.** | mDNS only: unreliable on some routers. |
 | MQTT security | LAN, port 1883, username+password per device, **no TLS** (decision F) | TLS: out of v1. |
@@ -122,6 +128,7 @@ The chat Edge Function belongs to olvar-gateway and has no firmware impact.
 | `boot_id` | 8 lowercase hex chars from `esp_random()`, generated once per boot after Wi-Fi starts (hardware RNG) | MAC- or counter-based ids: not random; an NVS boot counter wears flash for no benefit. |
 | Soil sampling | Sensor powered from 3V3 all the time. 64 samples ~1 ms apart: sort, drop the lowest and highest 16, average the middle 32. Report the 12-bit count. 100 nF on the pin. | Power from a GPIO: a board with the R4 defect then needs long settling. `analogReadMilliVolts`: the contract field is a raw count. |
 | Soil calibration | **None in firmware** (decision D). Dry/wet values live in the database and are set from the dashboard. | Serial `cal` commands / NVS calibration (earlier draft): removed. |
+| Soil sensor pre-check | **No chip reading, no multimeter.** VCC on 3V3. The serial `soilcheck` command streams `soil_raw` and judges the air/water span (§7.3). It's diagnostic only: nothing is stored or sent, so it doesn't conflict with decision D. | Visual chip check + multimeter (earlier draft): the user can't identify the chips. Feeding 5 V: if the regulator is missing on the delivered board, AOUT could exceed 3.3 V and damage GPIO34. |
 | Interval | Fixed **60 s** compile-time constant (`OLVAR_INTERVAL_S`), not a portal field (decision E) | Configurable interval: not needed for v1. |
 | Power | USB 5 V from a ≥1 A charger. **No deep sleep.** Default Wi-Fi modem-sleep. | Deep sleep: the MQTT connection and retained status would flap on every wake, for no gain on USB. |
 | Watchdogs | No successful publish for 10 min → `ESP.restart()`, plus the core's task watchdog | Restart on any Wi-Fi drop: too aggressive. |
@@ -133,7 +140,7 @@ The chat Edge Function belongs to olvar-gateway and has no firmware impact.
 The user's **FINAL contract** replaces the provisional one. Below is the firmware-facing part as the firmware will implement it, then what changed relative to the provisional contract and my first draft. Nothing is still open on the firmware side.
 
 ### 4.1 Final firmware contract
-- **Transport:** Wi-Fi to the Mosquitto broker on the Pi 3B, port 1883, unencrypted on the LAN, per-device username/password.
+- **Transport:** Wi-Fi to the Mosquitto broker on the Pi 3B, port 1883, unencrypted on the LAN, per-device password. **MQTT username = client id = `device_id`** (gateway ACL: a device may write only `olvar/v1/<username>/…`).
 - **Telemetry topic** `olvar/v1/<device_id>/telemetry`, **QoS 1**, not retained, every **60 s**.
   ```json
   {"device_id":"olvar-a1b2c3","boot_id":"9f3c07ab","seq":42,"uptime_ms":2520311,
@@ -142,7 +149,7 @@ The user's **FINAL contract** replaces the provisional one. Below is the firmwar
   ```
   | Field | Type | Firmware rule |
   |---|---|---|
-  | `device_id` | string | default `olvar-` + last 3 MAC bytes as 6 lowercase hex; overridable in the portal; `[a-z0-9-]{1,32}`; equals the topic segment and the MQTT client id |
+  | `device_id` | string | default `olvar-` + last 3 MAC bytes as 6 lowercase hex; overridable in the portal. **Must match the gateway rule `^[a-z0-9][a-z0-9-]{2,31}$`** (3–32 chars, first char a letter or digit), and **`olvar-gateway` is reserved**. Equals the topic segment, the MQTT client id and the MQTT username. |
   | `boot_id` | string | 8 lowercase hex chars, random per boot |
   | `seq` | uint32 | 0 at boot, +1 per telemetry message |
   | `uptime_ms` | uint32 | `millis()`, wraps after ~49.7 days |
@@ -167,6 +174,7 @@ The user's **FINAL contract** replaces the provisional one. Below is the firmwar
 | Dedup key | my draft: `(device_id, seq, uptime_ms)` | `(device_id, boot_id, seq)` |
 | Interval | configurable 10–3600 s | **fixed 60 s** |
 | OTA | optional ArduinoOTA | **removed**; USB only |
+| `device_id` rule | my draft: `[a-z0-9-]{1,32}` | gateway rule `^[a-z0-9][a-z0-9-]{2,31}$`, `olvar-gateway` reserved; MQTT username = device_id |
 
 ---
 
@@ -197,6 +205,7 @@ olvar-firmware/
 ├── README.md                   # quick start: install, flash, provision
 ├── .github/workflows/ci.yml    # pio test -e native ; pio run -e esp32dev
 ├── scripts/version.py          # appends git short hash to the fw string
+├── tools/sim_telemetry.sh      # MQTT telemetry simulator (incrementing seq, per-boot boot_id)
 ├── docs/
 │   ├── PLAN.md                 # this file
 │   ├── WIRING.md               # wiring table + soil-sensor check (from §7)
@@ -212,6 +221,7 @@ olvar-firmware/
 │   └── src/
 │       ├── reading.h                   # Reading/Meta structs (T0)
 │       ├── adc_filter.h / .cpp         # trimmedMean()
+│       ├── soil_check.h / .cpp         # judgeSoilCheck() verdicts for the serial soilcheck
 │       ├── sanitize.h / .cpp           # finite-or-null, rounding
 │       ├── telemetry.h / .cpp          # buildTelemetryJson()
 │       ├── ids.h / ids.cpp             # topics, isValidDeviceId, deviceIdFromMac, bootIdFromRandom
@@ -227,7 +237,7 @@ olvar-firmware/
 │   ├── serial_cli.*
 │   └── status_led.*
 └── test/
-    ├── native/   test_adc_filter/ test_sanitize/ test_telemetry/ test_ids/ test_settings/ test_cli/ test_backoff/
+    ├── native/   test_adc_filter/ test_sanitize/ test_soil_check/ test_telemetry/ test_ids/ test_settings/ test_cli/ test_backoff/
     └── embedded/ test_i2c_bus/ test_sensors/
 ```
 
@@ -277,14 +287,18 @@ struct OptF { bool ok=false; float v=0; };   struct OptI { bool ok=false; int32_
 struct Reading { OptF temperature_c, humidity_pct, lux; OptI soil_raw; };
 struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint32_t uptime_ms; const char* fw; OptI rssi_dbm; };
 // adc_filter.h int32_t trimmedMean(int32_t* samples, size_t n, size_t trimEachSide);   // sorts in place
+// soil_check.h enum class SoilVerdict{Ok,Saturated,NoSignal,Noisy,Swapped,Stuck,Slow,SmallSpan};
+//              struct SoilWindow{int32_t min,max,last; uint32_t settleMs;};   // stats over one air or water phase
+//              SoilVerdict judgeSoilCheck(const SoilWindow& air, const SoilWindow& water);  // diagnostic only, never stored/sent
 // sanitize.h   OptF finiteOrNull(float v); float roundTo(float v, int decimals);
 // telemetry.h  size_t buildTelemetryJson(const Reading&, const Meta&, char* out, size_t cap); // 0 on overflow
-// ids.h        bool isValidDeviceId(const char*); void deviceIdFromMac(const uint8_t mac[6], char out[13]);
+// ids.h        bool isValidDeviceId(const char*);   // ^[a-z0-9][a-z0-9-]{2,31}$ and != "olvar-gateway"
+//              void deviceIdFromMac(const uint8_t mac[6], char out[13]);
 //              void bootIdFromRandom(uint32_t r, char out[9]);
 //              size_t telemetryTopic(const char* id, char* out, size_t cap); size_t statusTopic(const char* id, char* out, size_t cap);
-// settings.h   struct Settings{char device_id[33]; char mqtt_host[64]; uint16_t mqtt_port=1883; char mqtt_user[33]; char mqtt_pass[65];};
+// settings.h   struct Settings{char device_id[33]; char mqtt_host[64]; uint16_t mqtt_port=1883; char mqtt_pass[65];}; // MQTT username = device_id
 //              bool validate(const Settings&, const char** err);
-// cli.h        enum class Cmd{Status,Raw,Portal,Reboot,Help,Unknown}; Cmd parseCommand(const char* line);
+// cli.h        enum class Cmd{Status,Raw,SoilCheck,Portal,Reboot,Help,Unknown}; Cmd parseCommand(const char* line);
 // backoff.h    class Backoff{ public: Backoff(uint32_t minMs,uint32_t maxMs); uint32_t next(uint32_t rand01k); void reset(); };
 //              class IntervalTimer{ public: explicit IntervalTimer(uint32_t periodMs); bool due(uint32_t nowMs); };
 ```
@@ -300,17 +314,18 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 
 **Verify:** run both commands locally and on CI. No hardware needed.
 
-### T1 — ADC filter and sanitiser (olvar_core)
-**Owns:** `lib/olvar_core/src/adc_filter.*`, `lib/olvar_core/src/sanitize.*`, `test/native/test_adc_filter/`, `test/native/test_sanitize/`.
+### T1 — ADC filter, sanitiser, soil-check verdict (olvar_core)
+**Owns:** `lib/olvar_core/src/adc_filter.*`, `lib/olvar_core/src/sanitize.*`, `lib/olvar_core/src/soil_check.*`, `test/native/test_adc_filter/`, `test/native/test_sanitize/`, `test/native/test_soil_check/`.
 **Acceptance:**
 - `trimmedMean` with n=64, trim=16 gives the mean of the middle 32 and ignores outliers. n=1 and trim≥n/2 fall back to the median.
 - `finiteOrNull` returns `ok=false` for NaN and ±Inf.
 - `roundTo` rounds half away from zero.
+- `judgeSoilCheck` implements the §7.3 table exactly, with the thresholds as named constants. Every verdict has a test case with a boundary value on each side.
 
-**Verify:** `pio test -e native -f native/test_adc_filter -f native/test_sanitize`. No hardware.
+**Verify:** `pio test -e native -f native/test_adc_filter -f native/test_sanitize -f native/test_soil_check`. No hardware.
 
 ### T2 — Telemetry JSON, ids/topics, contract fixtures (olvar_core)
-**Owns:** `lib/olvar_core/src/telemetry.*`, `lib/olvar_core/src/ids.*`, `test/native/test_telemetry/`, `test/native/test_ids/`, `docs/contract/telemetry.schema.json`, `docs/contract/telemetry.example.json`.
+**Owns:** `lib/olvar_core/src/telemetry.*`, `lib/olvar_core/src/ids.*`, `test/native/test_telemetry/`, `test/native/test_ids/`, `docs/contract/telemetry.schema.json`, `docs/contract/telemetry.example.json`, `tools/sim_telemetry.sh`.
 **Acceptance:**
 - The output has exactly the §4.1 keys, plus `rssi_dbm` only when `ok`. **No `soil_pct` key.**
 - A field with `ok=false`, NaN or Inf serialises as `null`.
@@ -318,16 +333,31 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 - Returns 0 when the buffer is too small (no truncated JSON).
 - The test parses the produced JSON back with ArduinoJson and checks it against the example.
 - Topics are `olvar/v1/<id>/telemetry` and `olvar/v1/<id>/status`.
-- `isValidDeviceId` accepts `[a-z0-9-]{1,32}` and rejects `/`, `+`, `#`, upper case, empty.
-- `deviceIdFromMac` gives `olvar-` + the last 3 bytes in lowercase hex.
+- `isValidDeviceId` implements the gateway rule `^[a-z0-9][a-z0-9-]{2,31}$` and rejects `olvar-gateway`.
+  - Accepts: `abc`, `olvar-a1b2c3`, 32-char ids.
+  - Rejects: `a`, `ab`, `-plant`, `olvar-gateway`, 33-char ids, `/`, `+`, `#`, upper case, empty.
+  - The schema's `device_id` pattern is the same regex.
+- `deviceIdFromMac` gives `olvar-` + the last 3 bytes in lowercase hex, and its output always passes `isValidDeviceId`.
 - `bootIdFromRandom` gives exactly 8 lowercase hex chars, zero-padded.
+- `tools/sim_telemetry.sh` is a simulator for developing without the board:
+  - Usage: `HOST=… DEVICE=… PASS=… [INTERVAL=60] [REBOOT_EVERY=0] tools/sim_telemetry.sh`.
+  - It picks a random `boot_id` once (`openssl rand -hex 4`) and starts `seq` at 0, with `uptime_ms` growing.
+  - Each loop publishes one payload with `mosquitto_pub -q 1` (as the device user), then increments `seq`. Sensor values are random-walked within plausible ranges; with `NULL_EVERY=n`, every nth message has `temperature_c` set to `null`.
+  - It publishes retained `online` on start and `offline` on Ctrl-C.
+  - If `REBOOT_EVERY=n`, every n messages it picks a new `boot_id` and resets `seq` and `uptime_ms` to 0, to simulate a reboot.
 
-**Verify:** native tests. Optionally `npx ajv-cli validate -s docs/contract/telemetry.schema.json -d docs/contract/telemetry.example.json`. No hardware. Post the fixture path in notes for the gateway worker.
+**Verify:**
+- Native tests.
+- Run `shellcheck tools/sim_telemetry.sh`.
+- Run the simulator against a local broker with `mosquitto_sub -v` and check that `seq` increments and `boot_id` is stable until a simulated reboot.
+- Optionally `npx ajv-cli validate -s docs/contract/telemetry.schema.json -d docs/contract/telemetry.example.json`.
+
+No hardware. Post the fixture and simulator paths in notes for the gateway worker.
 
 ### T3 — Settings model, CLI parser, backoff/timer (olvar_core)
 **Owns:** `lib/olvar_core/src/settings.*`, `lib/olvar_core/src/cli.*`, `lib/olvar_core/src/backoff.*`, `test/native/test_settings/`, `test/native/test_cli/`, `test/native/test_backoff/`.
 **Acceptance:**
-- `validate` rejects: empty host, port 0, invalid device_id.
+- `validate` rejects: empty host, port 0, empty password, and any device_id that fails `isValidDeviceId` (gateway rule + reserved `olvar-gateway`). The error message names the rule so the portal can show it.
 - The parser is case-insensitive, trims whitespace, and maps unknown input to `Unknown`.
 - `Backoff` doubles from min to max, applies ±20 % jitter, and `reset()` returns it to min.
 - `IntervalTimer` handles `millis()` wraparound (0xFFFFFF00 → 0x00000100).
@@ -356,7 +386,7 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 ### T5 — Settings storage and provisioning
 **Owns:** `src/storage/settings_store.*`, `src/net/provisioning.*`, `docs/PROVISIONING.md`.
 **Acceptance:**
-- `SettingsStore` load/save/clear round-trips `Settings` in Preferences namespace `olvar`. Keys: `dev_id, mq_host, mq_port, mq_user, mq_pass, portal`.
+- `SettingsStore` load/save/clear round-trips `Settings` in Preferences namespace `olvar`. Keys: `dev_id, mq_host, mq_port, mq_pass, portal`. There's no username key: the MQTT username is always `device_id`.
 - Missing keys fall back to defaults, then to `secrets.ini` build flags (`OLVAR_DEFAULT_*`).
 - The portal starts if there are no Wi-Fi credentials or the `portal` flag is set. The flag is set by a ≥3 s BOOT long-press at runtime (non-blocking detector owned here) or by the `portal` CLI command; GPIO0 is never read during reset.
 - AP `olvar-setup-<mac6>`; its password is printed on serial.
@@ -374,7 +404,8 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 **Owns:** `src/net/wifi_link.*`, `src/net/mqtt_link.*`.
 **Acceptance:**
 - STA mode with `setAutoReconnect(true)`, hostname = device_id, and disconnect reasons logged.
-- `MqttLink` sets client id = device_id, clean session, credentials, keepalive 30 s, and the will (`status`, `offline`, QoS 1, retain). On connect it publishes retained `online`.
+- `MqttLink` sets client id = username = device_id, the password, clean session, keepalive 30 s, and the will (`status`, `offline`, QoS 1, retain). On connect it publishes retained `online`.
+- `MqttLink` keeps a `skipped` counter for intervals dropped while disconnected. T7's `status` command prints it. `seq` counts only **published** messages, per §4.1.
 - `publishTelemetry()` publishes at QoS 1 and returns false when not connected; it never queues while disconnected.
 - **On disconnect, any unacked telemetry is discarded.** Check whether espMqttClient keeps its outbox across reconnects; if it does, clear it. Document the result in the code.
 - Reconnect uses `Backoff(1000, 60000)` from `loop()`, never from a callback.
@@ -385,7 +416,11 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 **Verify on hardware + Pi:**
 - `mosquitto_sub -h <pi> -u <user> -P <pw> -v -q 1 -t 'olvar/v1/#'` shows `online` (retained) and telemetry every 60 s with `boot_id` constant and `seq` increasing.
 - Unplug the ESP32. Within about 1.5× keepalive, status changes to `offline`.
-- Stop Mosquitto for 2 min, then start it again. The device reconnects without a reboot, `seq` jumps (dropped readings), and no old reading arrives late.
+- Stop Mosquitto for 2 min, then start it again. Check that:
+  - the device reconnects without a reboot (`boot_id` unchanged);
+  - `seq` continues **consecutively** (e.g. 42 → 43; no gap, because dropped intervals are never published);
+  - the dropped readings show up as a gap in the subscriber's receive times (no message for ~2 min) and as `skipped` ≥ 1 in the serial `status` output;
+  - no old reading arrives late: the first message after reconnect is a fresh sample, received within one interval of the reconnect.
 - After a reset, `boot_id` changes and `seq` restarts at 0.
 
 **Without hardware:** compile only. Optional local host test against `mosquitto` (espMqttClient builds on Linux); not in CI.
@@ -393,7 +428,14 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 ### T7 — Serial CLI and status LED
 **Owns:** `src/serial_cli.*`, `src/status_led.*`.
 **Acceptance:**
-- The CLI reads lines at 115200. `status` prints IP, RSSI, MQTT state, device_id, boot_id, seq and free heap. `raw` prints one fresh `soil_raw` plus the SHT31/BH1750 values, for wiring checks. `portal` sets the flag and reboots. `reboot`, `help`.
+- The CLI reads lines at 115200. `portal` sets the flag and reboots. `reboot`, `help`.
+- `status` prints IP, RSSI, MQTT state, device_id, boot_id, seq, skipped and free heap.
+- `raw` prints one fresh `soil_raw` plus the SHT31/BH1750 values, for wiring checks.
+- `soilcheck` runs the guided §7.3 check without blocking telemetry:
+  - Prompts "hold the sensor in AIR, press Enter", then streams `soil_raw` every 1 s for 20 s.
+  - Prompts "put it in WATER up to the line, press Enter", then streams for 30 s.
+  - Records min/max/last and the time to settle within ±30 counts of the final value.
+  - Prints the `judgeSoilCheck` verdict with its plain-language fix from §7.3. Nothing is saved or published.
 - LED patterns as in §5.1, all non-blocking.
 - No calibration commands.
 
@@ -418,7 +460,7 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 - All of `olvar_core` (T1–T3) with native Unity tests in CI.
 - A compile check of every Arduino adapter, also in CI.
 - The contract fixtures (T2), which the gateway can reuse.
-- The **gateway** can be developed without the ESP32 by publishing `docs/contract/telemetry.example.json` with `mosquitto_pub -q 1` in a loop.
+- The **gateway** can be developed without the ESP32 using `tools/sim_telemetry.sh` (T2). It keeps one `boot_id` per simulated boot and increments `seq` on every message, so dedup on `(device_id, boot_id, seq)` doesn't drop the stream. Republishing the static example JSON would make every message a duplicate after the first.
 
 ---
 
@@ -430,13 +472,38 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 
 ### 7.2 Raspberry Pi 3B (details in the gateway plan; the firmware needs these)
 1. Give the Pi a **DHCP reservation** in your router and note its IP.
-2. Install Mosquitto. Create one user for the device: `sudo mosquitto_passwd /etc/mosquitto/passwd olvar-a1b2c3`, using the device id the ESP32 prints on its first boot.
+2. Install Mosquitto. Create one user for the device whose **username is exactly the device id** the ESP32 prints on its first boot: `sudo mosquitto_passwd /etc/mosquitto/passwd olvar-a1b2c3`. The gateway's ACL only lets that username write under `olvar/v1/olvar-a1b2c3/…`. If you change the id in the portal, it must match `^[a-z0-9][a-z0-9-]{2,31}$` and must not be `olvar-gateway`, and you must create the matching broker user.
 
-### 7.3 Check the soil sensor before wiring (5 min, sensor unplugged)
-1. The small 3-pin chip near the connector should say **662K**.
-2. The 8-pin chip must say **TLC555** (or "TL555"/"555C"). **NE555 won't work at 3.3 V**: replace the sensor.
-3. Multimeter on resistance, **AOUT ↔ GND**: about **1 MΩ** is good. Open/"OL" means solder a 1 MΩ resistor between AOUT and GND.
-4. Coat the PCB edges and the top electronics (nail varnish, PlastiDip or heat-shrink). **Insert only up to the white line.**
+### 7.3 Soil sensor: safe wiring and software check (no chip reading, no multimeter)
+
+**Your model:** the generic "Capacitive Soil Moisture Sensor" from AliExpress item 1005005202930632. The seller's manual says 3.3–5.5 V, a built-in regulator and 0–3.0 V output; the version isn't stated (§2.3). It comes with a 3-wire cable: **red = VCC, black = GND, yellow = AOUT**. The pin names are also printed on the board next to the white connector.
+
+**Safe default wiring (always use this):**
+- Red **VCC → 3V3**: the board's 3V3 pin, or any expansion-board V pin with the jumper on 3.3 V. **Never 5V or VIN.** If your board happens to lack the regulator, 5 V could push AOUT above 3.3 V and damage GPIO34. At 3.3 V that can't happen, and a board with a regulator works fine on 3.3 V.
+- Black **GND → GND**.
+- Yellow **AOUT → GPIO34**, plus a 100 nF capacitor from GPIO34 to GND (§7.4).
+- Don't put it in the pot yet. Before the check, wipe the blade dry.
+
+**Software check** (after flashing; takes ~2 minutes):
+1. Run `pio device monitor` and type `soilcheck`, then Enter.
+2. When asked, **hold the sensor in the air** by its top edge, not touching the blade. Press Enter and wait 20 s.
+3. When asked, **stand the blade in a glass of water up to the white line**. Keep the electronics dry. Press Enter and wait 30 s.
+4. The firmware prints the air value, the water value, the span (air − water) and a verdict.
+
+**What to expect** (12-bit counts, 3.3 V supply): air **≈ 2400–3900**, water **≈ 900–2300**, span **≥ 600** (usually 1000–2000). Higher = drier. The exact numbers differ per sensor; the dashboard calibration uses your own values.
+
+| Verdict (checked in this order) | Rule | What it means → what to do |
+|---|---|---|
+| **Saturated** | air min ≥ 4000 | The pin sees ≥ ~3.1 V. **Unplug the red wire now.** Make sure it's on **3V3**, not 5V/VIN, and that yellow (not red) goes to GPIO34. Then re-run. |
+| **NoSignal** | air max < 300 | Nothing reaches GPIO34, or the sensor has no power. Re-seat all three wires and check that yellow is on **GPIO34** (not 35/32) and red/black aren't swapped. Re-run. |
+| **Noisy** | max − min > 300 within the air phase | The value jumps around: a loose wire or a floating pin (an unconnected ADC pin reads random values). Push the yellow wire in firmly, check the 100 nF capacitor sits between GPIO34 and GND, use shorter wires, re-run. |
+| **Swapped** | water value > air value + 150 | The steps were probably done in the wrong order. Re-run: air first, then water. |
+| **Stuck** | span < 150 | The sensor doesn't react to water. Its oscillator isn't running, which is typical of boards with a 5 V-only timer chip, or it's a dead board. **Replace the sensor**; they're about $1–2. When reordering, choose a listing whose photos show "TLC555" on the chip, or a branded one (DFRobot SEN0193). |
+| **Slow** | water value not settled (within ±30) after 15 s, or still drifting at 30 s | The reading follows water very slowly: the known "floating 1 MΩ resistor" defect. Fix without soldering: plug a **1 MΩ resistor** (colour bands brown-black-green) into the breadboard **between the yellow AOUT row and a GND row**. Re-run; it should now settle in a few seconds. If it's still slow, replace the sensor. |
+| **SmallSpan** | 150 ≤ span < 600 | It reacts, but weakly. Make sure the blade is in water **up to the line** and was **dry** for the air step, then re-run. If the span stays small it still works, but with coarse resolution; replace when convenient. |
+| **OK** | everything else (span ≥ 600) | Good. Dry the sensor, then insert it into the pot up to the line, always at the same depth and spot. |
+
+After a passing check, protect the sensor: coat the cut PCB edges along the blade and the electronics at the top (nail varnish, PlastiDip or heat-shrink). **Never push it in past the white line.** Then calibrate in the dashboard (§7.6).
 
 ### 7.4 Wiring table (38-pin ESP32-WROOM-32D on the expansion board + breadboard)
 
@@ -486,12 +553,12 @@ USB only: plug in the Mac and run `pio run -t upload`. Settings in NVS survive a
 ## 8. Risks and open questions for the user
 
 ### Open questions
-The final decisions answer the earlier questions (board, Wi-Fi, OTA, soil scale, interval). **No firmware question is still open.** One hardware fact is still unknown until you check it: whether your soil sensor passes §7.3. If it has an NE555 or fails the 1 MΩ test, fix or replace it before T4's hardware verification.
+The final decisions answer the earlier questions (board, Wi-Fi, OTA, soil scale, interval). **No firmware question is still open.** The listing doesn't say which version of the soil sensor you'll receive, so whether it works is only known after the `soilcheck` in §7.3 (no tools needed). If the verdict is **Stuck**, order a replacement before T4's hardware verification.
 
 ### Risks
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| Faulty cheap soil sensor (NE555 / floating R4 / missing regulator) | High | §7.3 check, 1 MΩ fix, replace if NE555 |
+| Faulty cheap soil sensor (5 V-only timer / floating R4 / missing regulator); the listing can't rule these out | High | 3V3 wiring is safe for every variant. The `soilcheck` verdict says what to do: plug in a 1 MΩ resistor for **Slow**, replace for **Stuck**. |
 | Soil sensor drifts over months as moisture gets into its edges | Medium | Coat the edges. Re-calibrate in the dashboard. `soil_raw` is always stored. |
 | Dry-air reading sits near the ADC's non-linear top (>2.45 V at 11 dB) | Medium | The server-side two-point calibration absorbs it. Readings only clip at 4095 (~3.1 V). |
 | Calibrating at a 60 s interval is slow: one reading per minute | Medium | §7.6 says to wait ≥2 readings. The dashboard should show the age of the latest `soil_raw`. |
