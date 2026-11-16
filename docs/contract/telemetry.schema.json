@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/olvar-gh/olvar-firmware/docs/contract/telemetry.schema.json",
+  "title": "Olvar telemetry v1 (firmware output)",
+  "description": "Payload the ESP32 publishes to olvar/v1/<device_id>/telemetry (QoS 1, not retained, every 60 s). Describes exactly what the firmware emits; consumers should still ignore unknown keys. See docs/PLAN.md §4.1. Dedup key is (device_id, boot_id, seq). NaN/Infinity are never sent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["device_id", "boot_id", "seq", "uptime_ms", "temperature_c", "humidity_pct", "lux", "soil_raw", "fw"],
+  "properties": {
+    "device_id": {
+      "description": "Gateway rule; 'olvar-gateway' is reserved. Equals the topic segment, MQTT client id and username. The extra 'not' pattern rejects a trailing newline, which Python's '$' would otherwise accept.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,31}$",
+      "not": { "anyOf": [{ "const": "olvar-gateway" }, { "pattern": "\\n" }] }
+    },
+    "boot_id": {
+      "description": "8 lowercase hex chars, random per boot.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}$",
+      "not": { "pattern": "\\n" }
+    },
+    "seq": {
+      "description": "0 at boot, +1 per message handed to the MQTT client; never reused within a boot_id. Gaps possible.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "uptime_ms": {
+      "description": "millis(); wraps after ~49.7 days.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "temperature_c": {
+      "description": "SHT31, 2 dp; null on read/CRC failure.",
+      "type": ["number", "null"]
+    },
+    "humidity_pct": {
+      "description": "SHT31, 2 dp; null on read/CRC failure.",
+      "type": ["number", "null"]
+    },
+    "lux": {
+      "description": "BH1750, 1 dp; null on failure.",
+      "type": ["number", "null"]
+    },
+    "soil_raw": {
+      "description": "12-bit ADC count at 11 dB, trimmed mean of 64 samples; higher = drier; null if sampling fails. No soil_pct is sent.",
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "maximum": 4095
+    },
+    "rssi_dbm": {
+      "description": "Wi-Fi RSSI. Optional: omitted (never null) when not connected.",
+      "type": "integer"
+    },
+    "fw": {
+      "description": "SemVer + git short hash, e.g. 0.1.0+a1b2c3d (bare SemVer when built without git).",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$",
+      "not": { "pattern": "\\n" }
+    }
+  }
+}
