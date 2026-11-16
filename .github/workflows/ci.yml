@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # scripts/version.py needs the git hash
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'lib/olvar_core/library.json') }}
+      - name: Install PlatformIO Core
+        run: pip install platformio==6.1.19
+      - name: Native tests
+        run: pio test -e native
+      - name: Firmware build
+        run: pio run -e esp32dev
