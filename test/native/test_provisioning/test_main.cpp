@@ -128,14 +128,34 @@ static void test_form_rejects_long_password() {
       settingsFromForm(form("olvar-a1b2c3", "h", "1883", std::string(64, 'p').c_str()), current(), out, nullptr));
 }
 
+static void test_submit_action() {
+  TEST_ASSERT_EQUAL(SubmitAction::Reject, submitAction(false, false, true));
+  TEST_ASSERT_EQUAL(SubmitAction::Reject, submitAction(false, true, true));
+  TEST_ASSERT_EQUAL(SubmitAction::JoinWifi, submitAction(true, true, false));
+  TEST_ASSERT_EQUAL(SubmitAction::JoinWifi, submitAction(true, true, true));
+  TEST_ASSERT_EQUAL(SubmitAction::SaveNow, submitAction(true, false, true));
+  TEST_ASSERT_EQUAL(SubmitAction::NeedWifi, submitAction(true, false, false));
+}
+
+static void test_rejected_form_is_never_handed_to_wifimanager() {
+  Settings out;
+  const bool valid = settingsFromForm(form("olvar-a1b2c3", "h", "0", "p"), current(), out, nullptr);
+  TEST_ASSERT_FALSE(valid);
+  TEST_ASSERT_EQUAL(SubmitAction::Reject, submitAction(valid, true, true));
+  TEST_ASSERT_EQUAL(SubmitAction::Reject, submitAction(valid, false, true));
+}
+
 static void test_portal_step() {
-  TEST_ASSERT_EQUAL(PortalStep::Wait, portalStep(false, false, false, true));
-  TEST_ASSERT_EQUAL(PortalStep::Wait, portalStep(false, true, false, true));
-  TEST_ASSERT_EQUAL(PortalStep::Reopen, portalStep(false, true, true, true));
-  TEST_ASSERT_EQUAL(PortalStep::Save, portalStep(true, true, true, true));
-  TEST_ASSERT_EQUAL(PortalStep::WifiFailed, portalStep(true, true, false, true));
-  TEST_ASSERT_EQUAL(PortalStep::Save, portalStep(true, false, false, true));
-  TEST_ASSERT_EQUAL(PortalStep::NeedWifi, portalStep(true, false, false, false));
+  TEST_ASSERT_EQUAL(PortalStep::Wait, portalStep(false, false, true));
+  TEST_ASSERT_EQUAL(PortalStep::Save, portalStep(true, true, false));
+  TEST_ASSERT_EQUAL(PortalStep::WifiFailed, portalStep(true, false, true));
+  TEST_ASSERT_EQUAL(PortalStep::Reopen, portalStep(false, true, false));
+}
+
+static void test_portal_closed_without_save_restarts_at_once() {
+  TEST_ASSERT_EQUAL(PortalStep::Closed, portalStep(false, false, false));
+  TEST_ASSERT_TRUE(bootNormallyAfterTimeout(true, current()));
+  TEST_ASSERT_FALSE(bootNormallyAfterTimeout(false, current()));
 }
 
 static void test_save_failure_after_join_reopens_portal() {
@@ -251,7 +271,10 @@ int main() {
   RUN_TEST(test_form_rejects_bad_hosts);
   RUN_TEST(test_form_rejects_bad_ports);
   RUN_TEST(test_form_rejects_long_password);
+  RUN_TEST(test_submit_action);
+  RUN_TEST(test_rejected_form_is_never_handed_to_wifimanager);
   RUN_TEST(test_portal_step);
+  RUN_TEST(test_portal_closed_without_save_restarts_at_once);
   RUN_TEST(test_save_failure_after_join_reopens_portal);
   RUN_TEST(test_overlong_values_are_rejected_not_shortened);
   RUN_TEST(test_password_with_quote_is_kept_verbatim);

@@ -35,14 +35,25 @@ struct PortalForm {
 // then validates. On failure *err names the rule and `out` is unspecified.
 bool settingsFromForm(const PortalForm& form, const Settings& current, Settings& out, const char** err);
 
+// What to do with a submitted form. The answer is sent before WiFiManager writes its own
+// unconditional "Saved" page, so a rejected form never looks saved.
+enum class SubmitAction {
+  Reject,    // a field is invalid: back to the form with the reason
+  NeedWifi,  // no network chosen and none saved
+  SaveNow,   // keep the saved network: store the settings and restart
+  JoinWifi,  // hand over to WiFiManager to join the submitted network
+};
+SubmitAction submitAction(bool formValid, bool wifiSubmitted, bool hasWifiCredentials);
+
 enum class PortalStep {
   Wait,
-  Save,        // form valid and Wi-Fi known: save, clear the flag, restart
-  WifiFailed,  // a network was submitted but joining it failed
-  NeedWifi,    // form valid but no network chosen and none saved
-  Reopen,      // joined the new network with an invalid form; WiFiManager has closed the AP
+  Save,        // joined the submitted network: store the settings and restart
+  WifiFailed,  // joining the submitted network failed; the portal stays open
+  Reopen,      // joined without settings to store; WiFiManager has closed the AP
+  Closed,      // the portal stopped without a save (Exit, close): restart as after a timeout
 };
-PortalStep portalStep(bool formValid, bool ssidSubmitted, bool joinedNewWifi, bool hasWifiCredentials);
+// joinPending: a valid form was handed to WiFiManager and its join attempt has run.
+PortalStep portalStep(bool joinPending, bool joinedNewWifi, bool portalActive);
 
 // What the save failure leaves behind: once a new network is joined WiFiManager has already
 // closed the AP, so the only way back to the form is a restart into the portal.
@@ -103,15 +114,24 @@ class Provisioning {
   [[noreturn]] void run(const Settings& current);
 
  private:
-  void onParamsSaved();
+  void onSubmit(bool fromWifiPage);
+  void rejectSubmit(const char* reason);
   void resetFields(const Settings& shown);
+  [[noreturn]] void restartAfterTimeout(const char* why);
+
+  // Subclass only to reach the protected /wifisave handler, which our own route forwards to.
+  class Manager : public WiFiManager {
+   public:
+    void forwardWifiSave() { handleWifiSave(); }
+  };
 
   SettingsStore& store_;
-  WiFiManager wm_;
+  Manager wm_;
   Settings current_;
   Settings pending_;
-  bool formValid_ = false;
-  bool ssidSubmitted_ = false;
+  bool joinPending_ = false;
+  bool restartPending_ = false;
+  uint32_t restartAtMs_ = 0;
   char banner_[192] = {};
   char portText_[6] = {};
   WiFiManagerParameter* devId_ = nullptr;

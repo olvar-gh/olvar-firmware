@@ -90,10 +90,16 @@ bool settingsFromForm(const PortalForm& form, const Settings& current, Settings&
   return true;
 }
 
-PortalStep portalStep(bool formValid, bool ssidSubmitted, bool joinedNewWifi, bool hasWifiCredentials) {
-  if (!formValid) return joinedNewWifi ? PortalStep::Reopen : PortalStep::Wait;
-  if (ssidSubmitted) return joinedNewWifi ? PortalStep::Save : PortalStep::WifiFailed;
-  return hasWifiCredentials ? PortalStep::Save : PortalStep::NeedWifi;
+SubmitAction submitAction(bool formValid, bool wifiSubmitted, bool hasWifiCredentials) {
+  if (!formValid) return SubmitAction::Reject;
+  if (wifiSubmitted) return SubmitAction::JoinWifi;
+  return hasWifiCredentials ? SubmitAction::SaveNow : SubmitAction::NeedWifi;
+}
+
+PortalStep portalStep(bool joinPending, bool joinedNewWifi, bool portalActive) {
+  if (joinedNewWifi) return joinPending ? PortalStep::Save : PortalStep::Reopen;
+  if (joinPending) return PortalStep::WifiFailed;
+  return portalActive ? PortalStep::Wait : PortalStep::Closed;
 }
 
 PortalStep afterSaveFailed(bool joinedNewWifi) {
@@ -173,31 +179,78 @@ void Provisioning::resetFields(const Settings& shown) {
   pass_->setValue("", pass_->getValueLength());
 }
 
-void Provisioning::onParamsSaved() {
-  // doParamSave() has already cut each value to the field length, so read the untruncated
-  // request arguments: an overlong value must be rejected, not saved shortened.
+void Provisioning::rejectSubmit(const char* reason) {
+  snprintf(banner_, sizeof(banner_), "<p style='color:#c00'>Not saved: %s.</p>", reason);
+  Serial.printf("[portal] not saved: %s\n", reason);
+  wm_.server->sendHeader("Location", "/wifi");
+  wm_.server->send(303, "text/plain", "");
+}
+
+void Provisioning::onSubmit(bool fromWifiPage) {
   const String id = wm_.server->arg(devId_->getID());
   const String host = wm_.server->arg(host_->getID());
   const String port = wm_.server->arg(port_->getID());
   const String pass = wm_.server->arg(pass_->getID());
   const PortalForm form{id.c_str(), host.c_str(), port.c_str(), pass.c_str()};
   const char* err = nullptr;
-  formValid_ = settingsFromForm(form, current_, pending_, &err);
-  if (formValid_) {
-    resetFields(pending_);
+  const bool valid = settingsFromForm(form, current_, pending_, &err);
+  // WiFiManager also joins when only a password is posted, reusing the saved network name.
+  const bool wifiSubmitted =
+      fromWifiPage && (wm_.server->arg("s").length() > 0 || wm_.server->arg("p").length() > 0);
+
+  Settings shown = current_;
+  if (valid) {
+    shown = pending_;
   } else {
-    Settings shown = current_;
     snprintf(shown.device_id, sizeof(shown.device_id), "%s", redisplayValue(id.c_str(), current_.device_id));
     snprintf(shown.mqtt_host, sizeof(shown.mqtt_host), "%s", redisplayValue(host.c_str(), current_.mqtt_host));
-    resetFields(shown);
   }
-  // WiFiManager also joins when only a password is posted, reusing the saved network name.
-  ssidSubmitted_ = wm_.server->arg("s").length() > 0 || wm_.server->arg("p").length() > 0;
-  if (formValid_) {
-    banner_[0] = '\0';
-  } else {
-    snprintf(banner_, sizeof(banner_), "<p style='color:#c00'>Not saved: %s.</p>", err);
-    Serial.printf("[portal] form rejected: %s\n", err);
+
+  switch (submitAction(valid, wifiSubmitted, valid && hasWifiCredentials())) {
+    case SubmitAction::Reject:
+      resetFields(shown);
+      rejectSubmit(err);
+      return;
+    case SubmitAction::NeedWifi:
+      resetFields(shown);
+      rejectSubmit("choose a Wi-Fi network");
+      return;
+    case SubmitAction::SaveNow: {
+      resetFields(shown);
+      if (!store_.save(pending_, &err)) {
+        rejectSubmit(err ? err : "unknown error");
+        return;
+      }
+      store_.setPortalRequested(false);
+      banner_[0] = '\0';
+      char page[256];
+      snprintf(page, sizeof(page),
+               "<!DOCTYPE html><meta name='viewport' content='width=device-width'>"
+               "<p>Saved. The board is restarting as %s.</p>",
+               pending_.device_id);
+      wm_.server->send(200, "text/html", page);
+      Serial.printf("[portal] saved; restarting as %s\n", pending_.device_id);
+      restartPending_ = true;
+      restartAtMs_ = millis();
+      return;
+    }
+    case SubmitAction::JoinWifi:
+      banner_[0] = '\0';
+      joinPending_ = true;
+      wm_.forwardWifiSave();
+      // forwardWifiSave() copied the raw submitted values back into the fields.
+      resetFields(shown);
+      return;
+  }
+}
+
+void Provisioning::restartAfterTimeout(const char* why) {
+  const bool normal = bootNormallyAfterTimeout(hasWifiCredentials(), current_);
+  store_.setPortalRequested(!normal);
+  Serial.printf("[portal] %s; restarting into %s\n", why, normal ? "normal mode" : "the portal");
+  delay(500);
+  ESP.restart();
+  for (;;) {
   }
 }
 
@@ -228,9 +281,16 @@ void Provisioning::run(const Settings& current) {
   wm_.addParameter(host_);
   wm_.addParameter(port_);
   wm_.addParameter(pass_);
-  wm_.setSaveParamsCallback([this] { onParamsSaved(); });
+  // Called before WiFiManager adds its routes, and the first matching route wins.
+  wm_.setWebServerCallback([this] {
+    wm_.server->on("/wifisave", [this] { onSubmit(true); });
+    wm_.server->on("/paramsave", [this] { onSubmit(false); });
+  });
+  std::vector<const char*> menu = {"wifi", "info", "restart"};
+  wm_.setMenu(menu);
   wm_.setTitle("Olvar setup");
   wm_.setShowInfoUpdate(false);
+  wm_.setShowInfoErase(false);
   wm_.setConnectTimeout(20);
   wm_.setConfigPortalBlocking(false);
   wm_.startConfigPortal(ssid, pass);
@@ -241,7 +301,14 @@ void Provisioning::run(const Settings& current) {
     const uint32_t now = millis();
     if (WiFi.softAPgetStationNum() > 0) lastActivity = now;
 
-    switch (portalStep(formValid_, ssidSubmitted_, joined, formValid_ && hasWifiCredentials())) {
+    if (restartPending_) {
+      // Give the "Saved" page time to reach the phone before the AP goes away.
+      if (now - restartAtMs_ >= 1000) ESP.restart();
+      delay(5);
+      continue;
+    }
+
+    switch (portalStep(joinPending_, joined, wm_.getConfigPortalActive())) {
       case PortalStep::Save: {
         const char* err = nullptr;
         if (store_.save(pending_, &err)) {
@@ -251,8 +318,6 @@ void Provisioning::run(const Settings& current) {
           ESP.restart();
         }
         Serial.printf("[portal] save failed: %s\n", err ? err : "unknown error");
-        snprintf(banner_, sizeof(banner_), "<p style='color:#c00'>Not saved: %s.</p>", err ? err : "unknown error");
-        formValid_ = false;
         if (afterSaveFailed(joined) == PortalStep::Reopen) {
           delay(500);
           ESP.restart();
@@ -262,27 +327,21 @@ void Provisioning::run(const Settings& current) {
       case PortalStep::WifiFailed:
         snprintf(banner_, sizeof(banner_), "<p style='color:#c00'>Could not join that Wi-Fi network. "
                                            "Check its name and password.</p>");
-        formValid_ = false;
-        break;
-      case PortalStep::NeedWifi:
-        snprintf(banner_, sizeof(banner_), "<p style='color:#c00'>Choose a Wi-Fi network.</p>");
-        formValid_ = false;
+        Serial.println("[portal] could not join the submitted Wi-Fi network");
+        joinPending_ = false;
         break;
       case PortalStep::Reopen:
-        Serial.println("[portal] Wi-Fi saved but the MQTT fields were not; reopening the portal");
+        Serial.println("[portal] Wi-Fi joined without settings to save; reopening the portal");
         delay(500);
         ESP.restart();
+        break;
+      case PortalStep::Closed:
+        restartAfterTimeout("portal closed");
       case PortalStep::Wait:
         break;
     }
 
-    if (portalExpired(lastActivity, now)) {
-      const bool normal = bootNormallyAfterTimeout(hasWifiCredentials(), current_);
-      store_.setPortalRequested(!normal);
-      Serial.printf("[portal] timed out; restarting into %s\n", normal ? "normal mode" : "the portal");
-      delay(500);
-      ESP.restart();
-    }
+    if (portalExpired(lastActivity, now)) restartAfterTimeout("timed out");
     delay(5);
   }
 }

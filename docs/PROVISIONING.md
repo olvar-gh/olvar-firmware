@@ -64,11 +64,17 @@ also why the long-press fires on release, not after 3 s.
 To change only the MQTT fields later, open the portal with a long-press, leave the network name
 empty, edit the fields and save: the saved Wi-Fi network is kept.
 
-If something is wrong, the page shows **Not saved: ...** with the broken rule (for example
-`MQTT port must be 1-65535`), or **Could not join that Wi-Fi network**. Fix it and save again.
-Nothing is written to NVS until every field is valid and the board has a Wi-Fi network.
-If the network was joined but a field was invalid (or NVS could not be written), the board restarts straight back into the
-portal (the Wi-Fi network is kept); the reason is printed on serial.
+If a field is invalid, nothing is saved and the browser goes straight back to the form, which
+shows **Not saved: ...** with the broken rule (for example `MQTT port must be 1-65535`). The same
+happens if no network is chosen and none is saved, or if NVS cannot be written. Fix it and save again.
+
+When a network is submitted, the board answers with WiFiManager's "trying to connect" page and then
+tries to join. If joining fails, the portal stays open and the form shows **Could not join that
+Wi-Fi network**. If the network was joined but NVS could not be written, the board restarts straight
+back into the portal (the Wi-Fi network is kept); the reason is printed on serial.
+
+The portal menu has no **Exit** or **Erase**. If the portal is stopped anyway (for example by
+opening `/exit`), the board restarts at once, following the timeout rule below.
 
 ## Timeout
 
