@@ -67,7 +67,7 @@ empty, edit the fields and save: the saved Wi-Fi network is kept.
 If something is wrong, the page shows **Not saved: ...** with the broken rule (for example
 `MQTT port must be 1-65535`), or **Could not join that Wi-Fi network**. Fix it and save again.
 Nothing is written to NVS until every field is valid and the board has a Wi-Fi network.
-If the network was joined but a field was invalid, the board restarts straight back into the
+If the network was joined but a field was invalid (or NVS could not be written), the board restarts straight back into the
 portal (the Wi-Fi network is kept); the reason is printed on serial.
 
 ## Timeout

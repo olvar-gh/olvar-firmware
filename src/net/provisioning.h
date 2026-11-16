@@ -44,6 +44,15 @@ enum class PortalStep {
 };
 PortalStep portalStep(bool formValid, bool ssidSubmitted, bool joinedNewWifi, bool hasWifiCredentials);
 
+// What the save failure leaves behind: once a new network is joined WiFiManager has already
+// closed the AP, so the only way back to the form is a restart into the portal.
+PortalStep afterSaveFailed(bool joinedNewWifi);
+
+// WiFiManager pastes field values unescaped into value='...'. A value is shown again only if it
+// contains none of ' " < > &, else `fallback` (if that is safe), else "".
+bool safeForHtmlAttr(const char* s);
+const char* redisplayValue(const char* submitted, const char* fallback);
+
 // Idle time counts from the last moment a phone was associated with the AP.
 bool portalExpired(uint32_t lastActivityMs, uint32_t nowMs);
 
@@ -95,6 +104,7 @@ class Provisioning {
 
  private:
   void onParamsSaved();
+  void resetFields(const Settings& shown);
 
   SettingsStore& store_;
   WiFiManager wm_;

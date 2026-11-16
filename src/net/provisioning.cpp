@@ -96,6 +96,19 @@ PortalStep portalStep(bool formValid, bool ssidSubmitted, bool joinedNewWifi, bo
   return hasWifiCredentials ? PortalStep::Save : PortalStep::NeedWifi;
 }
 
+PortalStep afterSaveFailed(bool joinedNewWifi) {
+  return joinedNewWifi ? PortalStep::Reopen : PortalStep::Wait;
+}
+
+bool safeForHtmlAttr(const char* s) {
+  return s && !strpbrk(s, "'\"<>&");
+}
+
+const char* redisplayValue(const char* submitted, const char* fallback) {
+  if (safeForHtmlAttr(submitted)) return submitted;
+  return safeForHtmlAttr(fallback) ? fallback : "";
+}
+
 bool portalExpired(uint32_t lastActivityMs, uint32_t nowMs) {
   return nowMs - lastActivityMs >= kPortalTimeoutMs;
 }
@@ -152,12 +165,34 @@ bool Provisioning::needed(const Settings& current) {
   return shouldOpenPortal(hasWifiCredentials(), store_.portalRequested(), validate(current, nullptr));
 }
 
+void Provisioning::resetFields(const Settings& shown) {
+  snprintf(portText_, sizeof(portText_), "%u", shown.mqtt_port);
+  devId_->setValue(redisplayValue(shown.device_id, current_.device_id), devId_->getValueLength());
+  host_->setValue(redisplayValue(shown.mqtt_host, current_.mqtt_host), host_->getValueLength());
+  port_->setValue(portText_, port_->getValueLength());
+  pass_->setValue("", pass_->getValueLength());
+}
+
 void Provisioning::onParamsSaved() {
-  const PortalForm form{devId_->getValue(), host_->getValue(), port_->getValue(), pass_->getValue()};
+  // doParamSave() has already cut each value to the field length, so read the untruncated
+  // request arguments: an overlong value must be rejected, not saved shortened.
+  const String id = wm_.server->arg(devId_->getID());
+  const String host = wm_.server->arg(host_->getID());
+  const String port = wm_.server->arg(port_->getID());
+  const String pass = wm_.server->arg(pass_->getID());
+  const PortalForm form{id.c_str(), host.c_str(), port.c_str(), pass.c_str()};
   const char* err = nullptr;
   formValid_ = settingsFromForm(form, current_, pending_, &err);
+  if (formValid_) {
+    resetFields(pending_);
+  } else {
+    Settings shown = current_;
+    snprintf(shown.device_id, sizeof(shown.device_id), "%s", redisplayValue(id.c_str(), current_.device_id));
+    snprintf(shown.mqtt_host, sizeof(shown.mqtt_host), "%s", redisplayValue(host.c_str(), current_.mqtt_host));
+    resetFields(shown);
+  }
   // WiFiManager also joins when only a password is posted, reusing the saved network name.
-  ssidSubmitted_ = wm_.server && (wm_.server->arg("s").length() > 0 || wm_.server->arg("p").length() > 0);
+  ssidSubmitted_ = wm_.server->arg("s").length() > 0 || wm_.server->arg("p").length() > 0;
   if (formValid_) {
     banner_[0] = '\0';
   } else {
@@ -180,15 +215,14 @@ void Provisioning::run(const Settings& current) {
   Serial.printf("[portal] device_id %s\n", current.device_id);
   Serial.printf("[portal] join Wi-Fi \"%s\" with password \"%s\", then open http://192.168.4.1\n", ssid, pass);
 
-  snprintf(portText_, sizeof(portText_), "%u", current.mqtt_port);
   static WiFiManagerParameter banner(banner_);
-  // WiFiManager silently truncates submitted values to these lengths, which match the Settings limits.
-  devId_ = new WiFiManagerParameter("dev_id", "Device id (MQTT username)", current.device_id, 32);
-  host_ = new WiFiManagerParameter("mq_host", "MQTT host (gateway IP or name)", current.mqtt_host, 63);
-  port_ = new WiFiManagerParameter("mq_port", "MQTT port", portText_, 5, "inputmode='numeric'");
+  devId_ = new WiFiManagerParameter("dev_id", "Device id (MQTT username)", "", 32);
+  host_ = new WiFiManagerParameter("mq_host", "MQTT host (gateway IP or name)", "", 63);
+  port_ = new WiFiManagerParameter("mq_port", "MQTT port", "", 5, "inputmode='numeric'");
   pass_ = new WiFiManagerParameter("mq_pass", "MQTT password", "", 64,
                                    current.mqtt_pass[0] ? "type='password' placeholder='(unchanged)'"
                                                         : "type='password'");
+  resetFields(current);
   wm_.addParameter(&banner);
   wm_.addParameter(devId_);
   wm_.addParameter(host_);
@@ -216,8 +250,13 @@ void Provisioning::run(const Settings& current) {
           delay(500);
           ESP.restart();
         }
+        Serial.printf("[portal] save failed: %s\n", err ? err : "unknown error");
         snprintf(banner_, sizeof(banner_), "<p style='color:#c00'>Not saved: %s.</p>", err ? err : "unknown error");
         formValid_ = false;
+        if (afterSaveFailed(joined) == PortalStep::Reopen) {
+          delay(500);
+          ESP.restart();
+        }
         break;
       }
       case PortalStep::WifiFailed:

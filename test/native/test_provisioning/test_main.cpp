@@ -138,6 +138,40 @@ static void test_portal_step() {
   TEST_ASSERT_EQUAL(PortalStep::NeedWifi, portalStep(true, false, false, false));
 }
 
+static void test_save_failure_after_join_reopens_portal() {
+  TEST_ASSERT_EQUAL(PortalStep::Reopen, afterSaveFailed(true));
+  TEST_ASSERT_EQUAL(PortalStep::Wait, afterSaveFailed(false));
+}
+
+static void test_overlong_values_are_rejected_not_shortened() {
+  assertFormRejected(form("olvar-a1b2c3", "h", "100000", "p"), "port");
+  assertFormRejected(form("olvar-a1b2c3", "h", "1883", std::string(65, 'p').c_str()), "password");
+  assertFormRejected(form("olvar-a1b2c3", std::string(64, 'h').c_str(), "1883", "p"), "MQTT host");
+}
+
+static void test_password_with_quote_is_kept_verbatim() {
+  Settings out;
+  TEST_ASSERT_TRUE(settingsFromForm(form("olvar-a1b2c3", "h", "1883", "pa'ss\"<&>"), current(), out, nullptr));
+  TEST_ASSERT_EQUAL_STRING("pa'ss\"<&>", out.mqtt_pass);
+}
+
+static void test_safe_for_html_attr() {
+  TEST_ASSERT_TRUE(safeForHtmlAttr(""));
+  TEST_ASSERT_TRUE(safeForHtmlAttr("olvar-gw.local"));
+  TEST_ASSERT_FALSE(safeForHtmlAttr(nullptr));
+  TEST_ASSERT_FALSE(safeForHtmlAttr("a'b"));
+  TEST_ASSERT_FALSE(safeForHtmlAttr("a\"b"));
+  TEST_ASSERT_FALSE(safeForHtmlAttr("<b>"));
+  TEST_ASSERT_FALSE(safeForHtmlAttr("a&b"));
+}
+
+static void test_redisplay_value_never_returns_unsafe_text() {
+  TEST_ASSERT_EQUAL_STRING("my-gw", redisplayValue("my-gw", "old"));
+  TEST_ASSERT_EQUAL_STRING("old", redisplayValue("gw'><script>alert(1)</script>", "old"));
+  TEST_ASSERT_EQUAL_STRING("", redisplayValue("x'", "y'"));
+  TEST_ASSERT_EQUAL_STRING("old", redisplayValue(nullptr, "old"));
+}
+
 static void test_portal_expires_after_5_minutes_idle_across_wrap() {
   TEST_ASSERT_FALSE(portalExpired(1000, 1000 + 299999));
   TEST_ASSERT_TRUE(portalExpired(1000, 1000 + 300000));
@@ -218,6 +252,11 @@ int main() {
   RUN_TEST(test_form_rejects_bad_ports);
   RUN_TEST(test_form_rejects_long_password);
   RUN_TEST(test_portal_step);
+  RUN_TEST(test_save_failure_after_join_reopens_portal);
+  RUN_TEST(test_overlong_values_are_rejected_not_shortened);
+  RUN_TEST(test_password_with_quote_is_kept_verbatim);
+  RUN_TEST(test_safe_for_html_attr);
+  RUN_TEST(test_redisplay_value_never_returns_unsafe_text);
   RUN_TEST(test_portal_expires_after_5_minutes_idle_across_wrap);
   RUN_TEST(test_timeout_boots_normally_only_with_wifi_and_valid_settings);
   RUN_TEST(test_long_press_fires_once_on_release);
