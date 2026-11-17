@@ -102,3 +102,10 @@ if (portal.needed(settings)) portal.run(settings);   // never returns
 olvar::BootButton boot; boot.begin();
 // in loop(): if (boot.poll()) { store.setPortalRequested(true); /* publish offline */ ESP.restart(); }
 ```
+
+## Saving is all-or-nothing
+
+`save()` first writes the new values to staging keys (`n_dev_id`, `n_mq_host`, `n_mq_port`,
+`n_mq_pass`), then sets `n_commit`, then copies them to the keys above and removes the staging
+keys. If a write fails or power is cut before `n_commit` is set, the old settings stay in use; after
+it, the new ones do. Settings are never a mix of old and new values.

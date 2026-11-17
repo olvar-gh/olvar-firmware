@@ -1,19 +1,16 @@
-// Stub entry point: prints the firmware version. Replaced by the app in T8.
-//
-// The esp32dev env builds src/ into embedded tests (test_build_src = yes) so the
-// adapters under src/ are testable; each Unity test then brings its own
-// setup()/loop(), so this file must stay out of test builds.
+// Embedded tests build src/ too (test_build_src = yes) and bring their own setup()/loop().
 #ifndef PIO_UNIT_TESTING
 
 #include <Arduino.h>
 
-#include "pins.h"
+#include "app.h"
 
-void setup() {
-  Serial.begin(115200);
-  Serial.printf("olvar-firmware %s\n", OLVAR_FW_VERSION);
+namespace {
+olvar::App app;
 }
 
-void loop() { delay(1000); }
+void setup() { app.setup(); }
+
+void loop() { app.loop(); }
 
 #endif  // PIO_UNIT_TESTING

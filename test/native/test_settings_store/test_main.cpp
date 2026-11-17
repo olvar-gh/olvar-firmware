@@ -1,4 +1,3 @@
-// Native tests for SettingsStore against an in-memory KvStore (docs/PLAN.md §6 T5).
 #include <string.h>
 #include <unity.h>
 
@@ -22,6 +21,14 @@ class FakeKv : public KvStore {
   bool open = false;
   bool readOnly = false;
   bool failWrites = false;
+  // Writes (puts and removes) that succeed before every later one fails, like a power cut; -1 = no limit.
+  int writesLeft = -1;
+
+  bool spendWrite() {
+    if (writesLeft == 0) return false;
+    if (writesLeft > 0) --writesLeft;
+    return true;
+  }
 
   bool begin(const char* n, bool ro) override {
     if (open) return false;
@@ -42,7 +49,7 @@ class FakeKv : public KvStore {
     return true;
   }
   bool put(const char* key, const std::string& v) {
-    if (!open || readOnly || failWrites) return false;
+    if (!open || readOnly || failWrites || !spendWrite()) return false;
     data[ns][key] = v;
     return true;
   }
@@ -54,7 +61,7 @@ class FakeKv : public KvStore {
   bool getBool(const char* key, bool fallback) override { return has(key) ? data[ns][key] == "1" : fallback; }
   bool putBool(const char* key, bool value) override { return put(key, value ? "1" : "0"); }
   bool remove(const char* key) override {
-    if (!open || readOnly) return false;
+    if (!open || readOnly || !spendWrite()) return false;
     return data[ns].erase(key) == 1;
   }
   bool clear() override {
@@ -175,6 +182,80 @@ static void test_save_reports_write_failure() {
   TEST_ASSERT_FALSE(kv.open);
 }
 
+Settings other() {
+  Settings s;
+  strcpy(s.device_id, "olvar-other");
+  strcpy(s.mqtt_host, "gw.local");
+  s.mqtt_port = 1883;
+  strcpy(s.mqtt_pass, "new password");
+  return s;
+}
+
+static void test_save_failing_partway_keeps_old_or_new_never_a_mix() {
+  for (int allowed = 0; allowed < 40; ++allowed) {
+    FakeKv kv;
+    SettingsStore store(kv);
+    TEST_ASSERT_TRUE(store.save(good()));
+    kv.writesLeft = allowed;
+    const char* err = nullptr;
+    const bool saved = store.save(other(), &err);
+    kv.writesLeft = -1;
+    TEST_ASSERT_FALSE(kv.open);
+
+    Settings out;
+    TEST_ASSERT_TRUE(store.load(out, olvar::defaultSettings(kMac)));
+    if (saved) {
+      assertSame(other(), out);
+    } else {
+      TEST_ASSERT_EQUAL_STRING("NVS write failed", err);
+      assertSame(good(), out);
+    }
+
+    Settings third = good();
+    strcpy(third.device_id, "olvar-third");
+    TEST_ASSERT_TRUE(store.save(third));
+    TEST_ASSERT_TRUE(store.load(out, olvar::defaultSettings(kMac)));
+    assertSame(third, out);
+    TEST_ASSERT_EQUAL_size_t(4, kv.data["olvar"].size());
+  }
+}
+
+static void test_save_interrupted_after_commit_survives_a_second_interruption() {
+  for (int first = 0; first < 20; ++first) {
+    for (int second = 0; second < 20; ++second) {
+      FakeKv kv;
+      SettingsStore store(kv);
+      TEST_ASSERT_TRUE(store.save(good()));
+      kv.writesLeft = first;
+      const bool savedOther = store.save(other());
+      Settings third = good();
+      strcpy(third.device_id, "olvar-third");
+      kv.writesLeft = second;
+      const bool savedThird = store.save(third);
+      kv.writesLeft = -1;
+
+      Settings out;
+      store.load(out, olvar::defaultSettings(kMac));
+      assertSame(savedThird ? third : (savedOther ? other() : good()), out);
+    }
+  }
+}
+
+static void test_failed_first_save_on_fresh_flash_leaves_defaults() {
+  for (int allowed = 0; allowed < 10; ++allowed) {
+    FakeKv kv;
+    SettingsStore store(kv);
+    kv.writesLeft = allowed;
+    const bool saved = store.save(good());
+    kv.writesLeft = -1;
+    Settings d = olvar::defaultSettings(kMac);
+    Settings out;
+    const bool any = store.load(out, d);
+    TEST_ASSERT_EQUAL(saved, any);
+    assertSame(saved ? good() : d, out);
+  }
+}
+
 static void test_portal_flag_set_and_clear() {
   FakeKv kv;
   SettingsStore store(kv);
@@ -220,6 +301,9 @@ int main() {
   RUN_TEST(test_oversized_stored_value_falls_back);
   RUN_TEST(test_save_rejects_invalid_settings_and_writes_nothing);
   RUN_TEST(test_save_reports_write_failure);
+  RUN_TEST(test_save_failing_partway_keeps_old_or_new_never_a_mix);
+  RUN_TEST(test_save_interrupted_after_commit_survives_a_second_interruption);
+  RUN_TEST(test_failed_first_save_on_fresh_flash_leaves_defaults);
   RUN_TEST(test_portal_flag_set_and_clear);
   RUN_TEST(test_portal_flag_does_not_disturb_settings);
   RUN_TEST(test_clear_erases_settings_and_flag);
