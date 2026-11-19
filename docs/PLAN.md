@@ -483,12 +483,12 @@ No hardware. The gateway reuses the fixtures and the simulator.
 
 ### 7.3 Soil sensor: safe wiring and software check (no chip reading, no multimeter)
 
-**Your model:** a generic capacitive soil moisture sensor, 3.3–5.5 V. The seller's manual says a built-in regulator and 0–3.0 V output; the version isn't stated (§2.3). It comes with a 3-wire cable: **red = VCC, black = GND, yellow = AOUT**. The pin names are also printed on the board next to the white connector.
+**Your model:** a generic capacitive soil moisture sensor, 3.3–5.5 V. The seller's manual says a built-in regulator and 0–3.0 V output; the version isn't stated (§2.3). Its three pins are **VCC**, **GND** and **AOUT**. The usual cable colours are red = VCC, black = GND, yellow = AOUT, but not every board uses them, so **check the pin labels printed on your board next to the connector, or its datasheet, before applying power** and follow the labels, not the colours.
 
 **Safe default wiring (always use this):**
-- Red **VCC → 3V3**: the board's 3V3 pin, or any expansion-board V pin with the jumper on 3.3 V. **Never 5V or VIN.** If your board happens to lack the regulator, 5 V could push AOUT above 3.3 V and damage GPIO34. At 3.3 V that can't happen, and a board with a regulator works fine on 3.3 V.
-- Black **GND → GND**.
-- Yellow **AOUT → GPIO34**, plus (recommended) a 100 nF capacitor from GPIO34 to GND (§7.4).
+- **VCC → 3V3**: the board's 3V3 pin, or any expansion-board V pin with the jumper on 3.3 V. **Never 5V or VIN.** If your board happens to lack the regulator, 5 V could push AOUT above 3.3 V and damage GPIO34. At 3.3 V that can't happen, and a board with a regulator works fine on 3.3 V.
+- **GND → GND**.
+- **AOUT → GPIO34**, plus (recommended) a 100 nF capacitor from GPIO34 to GND (§7.4).
 - Don't put it in the pot yet. Before the check, wipe the blade dry.
 
 **Software check** (after flashing; takes ~2 minutes):
@@ -501,12 +501,12 @@ No hardware. The gateway reuses the fixtures and the simulator.
 
 | Verdict (checked in this order) | Rule | What it means → what to do |
 |---|---|---|
-| **Saturated** | air min ≥ 4000 | The pin sees ≥ ~3.1 V. **Unplug the red wire now.** Make sure it's on **3V3**, not 5V/VIN, and that yellow (not red) goes to GPIO34. Then re-run. |
-| **NoSignal** | air max < 300 | Nothing reaches GPIO34, or the sensor has no power. Re-seat all three wires and check that yellow is on **GPIO34** (not 35/32) and red/black aren't swapped. Re-run. |
-| **Noisy** | max − min > 300 within the air phase | The value jumps around: a loose wire or a floating pin (an unconnected ADC pin reads random values). Push the yellow wire in firmly, check the 100 nF capacitor sits between GPIO34 and GND, use shorter wires, re-run. |
+| **Saturated** | air min ≥ 4000 | The pin sees ≥ ~3.1 V. **Unplug the VCC wire now.** Make sure it's on **3V3**, not 5V/VIN, and that AOUT (not VCC) goes to GPIO34. Then re-run. |
+| **NoSignal** | air max < 300 | Nothing reaches GPIO34, or the sensor has no power. Re-seat all three wires and check that AOUT is on **GPIO34** (not 35/32) and VCC/GND aren't swapped. Re-run. |
+| **Noisy** | max − min > 300 within the air phase | The value jumps around: a loose wire or a floating pin (an unconnected ADC pin reads random values). Push the AOUT wire in firmly, check the 100 nF capacitor sits between GPIO34 and GND, use shorter wires, re-run. |
 | **Swapped** | water value > air value + 150 | The steps were probably done in the wrong order. Re-run: air first, then water. |
 | **Stuck** | span < 150 | The sensor doesn't react to water. Its oscillator isn't running, which is typical of boards with a 5 V-only timer chip, or it's a dead board. **Replace the sensor**; they're about $1–2. When reordering, choose a listing whose photos show "TLC555" on the chip, or a branded one (DFRobot SEN0193). |
-| **Slow** | water value not settled (within ±30) after 15 s, or still drifting at 30 s | The reading follows water very slowly: the known "floating 1 MΩ resistor" defect. Fix without soldering: plug a **1 MΩ resistor** (colour bands brown-black-green) into the breadboard **between the yellow AOUT row and a GND row**. Re-run; it should now settle in a few seconds. If it's still slow, replace the sensor. |
+| **Slow** | water value not settled (within ±30) after 15 s, or still drifting at 30 s | The reading follows water very slowly: the known "floating 1 MΩ resistor" defect. Fix without soldering: plug a **1 MΩ resistor** (colour bands brown-black-green) into the breadboard **between the AOUT row and a GND row**. Re-run; it should now settle in a few seconds. If it's still slow, replace the sensor. |
 | **SmallSpan** | 150 ≤ span < 600 | It reacts, but weakly. Make sure the blade is in water **up to the line** and was **dry** for the air step, then re-run. If the span stays small it still works, but with coarse resolution; replace when convenient. |
 | **OK** | everything else (span ≥ 600) | Good. Dry the sensor, then insert it into the pot up to the line, always at the same depth and spot. |
 
@@ -528,9 +528,9 @@ After a passing check, protect the sensor: coat the cut PCB edges along the blad
 | 8 | GY-302 **SDA** | SDA row (→ GPIO21) | |
 | 9 | GY-302 **SCL** | SCL row (→ GPIO22) | |
 | 10 | GY-302 **ADDR** | **GND** or leave unconnected | → address **0x23**; never 5 V |
-| 11 | Soil sensor **VCC** (red) | **3V3** | |
-| 12 | Soil sensor **GND** (black) | **GND** | |
-| 13 | Soil sensor **AOUT** (yellow) | **GPIO34** | ADC1_CH6, input-only; **not** an ADC2 pin |
+| 11 | Soil sensor **VCC** (often red) | **3V3** | |
+| 12 | Soil sensor **GND** (often black) | **GND** | |
+| 13 | Soil sensor **AOUT** (often yellow) | **GPIO34** | ADC1_CH6, input-only; **not** an ADC2 pin |
 | 14 | 100 nF ceramic capacitor ("104"), recommended | between **GPIO34** and **GND**, close to the ESP32 | ADC noise; optional thanks to the 64-sample filter |
 | 15 | USB cable | ESP32 board's USB port → 5 V ≥1 A charger (or your Mac while flashing) | |
 
