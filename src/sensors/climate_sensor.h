@@ -23,7 +23,8 @@ class ClimateSensor {
   // millis() at which readPrepared() gets it; for an SHT31 it returns millis() (always fresh).
   uint32_t prepare();
   // The value to publish: like read(), but null when the DHT11 didn't answer the prepare() read,
-  // since then no new conversion was started and the next frame would hold an older sample.
+  // since then no new conversion was started and the next frame would hold an older sample, and
+  // null when the next frame would still be one of the two unsettled ones after power-up.
   TempHumidity readPrepared();
   TempHumidity read();
 

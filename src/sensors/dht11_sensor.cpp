@@ -38,7 +38,7 @@ TempHumidity Dht11Sensor::read() {
   if (!throttle_.due(millis())) return last_;
   uint8_t bytes[5];
   last_ = readFrame(bytes) ? dht11Decode(bytes) : TempHumidity{};
-  throttle_.mark(millis());  // the 2 s count from the end of the transaction
+  throttle_.mark(millis(), last_.temperature_c.ok);  // the 2 s count from the end of the transaction
   return last_;
 }
 

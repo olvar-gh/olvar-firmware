@@ -23,6 +23,8 @@ class Dht11Sensor {
   // again, so a current value needs two reads 2 s apart (ClimateSensor::prepare()).
   TempHumidity read();
   uint32_t dueAtMs() const { return throttle_.dueAtMs(millis()); }
+  // False until two reads have been answered: the replies before that may be unsettled.
+  bool nextReplySettled() const { return throttle_.nextReplySettled(); }
 
  private:
   bool readFrame(uint8_t bytes[5]);

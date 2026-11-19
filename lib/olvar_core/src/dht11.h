@@ -31,15 +31,21 @@ class Dht11Throttle {
   bool due(uint32_t nowMs) const { return !started_ || nowMs - lastMs_ >= kMinIntervalMs; }
   // Absolute millis() at which the next transaction may start (nowMs if it already may).
   uint32_t dueAtMs(uint32_t nowMs) const { return due(nowMs) ? nowMs : lastMs_ + kMinIntervalMs; }
-  // Call when a transaction has ended.
-  void mark(uint32_t nowMs) {
+  // Call when a transaction has ended; answered = it returned a valid frame.
+  void mark(uint32_t nowMs, bool answered) {
     started_ = true;
     lastMs_ = nowMs;
+    if (answered && answered_ < 2) ++answered_;
   }
+  // True once two transactions have been answered. The first reply holds the power-up sample and
+  // the second the sample taken right after the first start signal, which can still be far off
+  // (a DHT11 gave 5 %RH there while later reads were normal); every later reply is settled.
+  bool nextReplySettled() const { return answered_ >= 2; }
 
  private:
   bool started_ = false;
   uint32_t lastMs_ = 0;
+  uint8_t answered_ = 0;
 };
 
 }  // namespace olvar

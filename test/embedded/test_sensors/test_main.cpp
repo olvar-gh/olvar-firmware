@@ -38,7 +38,13 @@ void test_climate_in_room_range() {
   TEST_ASSERT_TRUE_MESSAGE(climate.kind() != ClimateSensor::Kind::None,
                            "no SHT31 at 0x44/0x45 and no DHT11 on GPIO4");
   bool dht = climate.kind() == ClimateSensor::Kind::Dht11;
-  if (dht) delay(Dht11Throttle::kMinIntervalMs);  // past the 2 s window of the boot probe
+  if (dht) {
+    // The first read after the boot probe returns a sample taken before the DHT11 settled (one
+    // gave 5 %RH there while later reads were normal): discard it and read again after 2 s.
+    delay(Dht11Throttle::kMinIntervalMs);
+    climate.read();
+    delay(Dht11Throttle::kMinIntervalMs);
+  }
   uint32_t t0 = millis();
   TempHumidity r = climate.read();
   uint32_t dt = millis() - t0;

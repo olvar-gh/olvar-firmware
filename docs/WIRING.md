@@ -128,9 +128,8 @@ which sensor is in use (`DHT11 on GPIO4` or `SHT31 at 0x44`).
 
 ## Soil sensor: safe wiring and software check
 
-**Your model:** the generic "Capacitive Soil Moisture Sensor" from AliExpress item
-1005005202930632. The seller's manual says 3.3–5.5 V, a built-in regulator and 0–3.0 V output; the
-version isn't stated. It comes with a 3-wire cable: **red = VCC, black = GND, yellow = AOUT**. The
+**Your model:** a generic capacitive soil moisture sensor, 3.3–5.5 V. The seller's manual says a
+built-in regulator and 0–3.0 V output; the version isn't stated. It comes with a 3-wire cable: **red = VCC, black = GND, yellow = AOUT**. The
 pin names are also printed on the board next to the white connector.
 
 **Safe default wiring (always use this):**

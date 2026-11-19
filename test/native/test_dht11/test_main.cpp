@@ -84,7 +84,7 @@ static void test_pulses_to_bytes_uses_50us_threshold() {
 static void test_throttle_allows_one_read_per_2s() {
   Dht11Throttle t;
   TEST_ASSERT_TRUE(t.due(0));
-  t.mark(500);
+  t.mark(500, true);
   TEST_ASSERT_FALSE(t.due(500));
   TEST_ASSERT_FALSE(t.due(2499));
   TEST_ASSERT_TRUE(t.due(2500));
@@ -94,7 +94,7 @@ static void test_throttle_allows_one_read_per_2s() {
 static void test_throttle_due_at_is_absolute() {
   Dht11Throttle t;
   TEST_ASSERT_EQUAL_UINT32(100, t.dueAtMs(100));
-  t.mark(1025);
+  t.mark(1025, true);
   TEST_ASSERT_EQUAL_UINT32(3025, t.dueAtMs(1025));
   TEST_ASSERT_EQUAL_UINT32(3025, t.dueAtMs(2999));
   TEST_ASSERT_FALSE(t.due(t.dueAtMs(1025) - 1));
@@ -104,9 +104,23 @@ static void test_throttle_due_at_is_absolute() {
 
 static void test_throttle_survives_millis_wrap() {
   Dht11Throttle t;
-  t.mark(0xFFFFFF00u);
+  t.mark(0xFFFFFF00u, true);
   TEST_ASSERT_FALSE(t.due(0x00000100u));
   TEST_ASSERT_TRUE(t.due(0x00000800u));
+}
+
+// Two answered transactions are needed before a reply holds a settled sample; failures don't count.
+static void test_throttle_settles_after_two_answered_reads() {
+  Dht11Throttle t;
+  TEST_ASSERT_FALSE(t.nextReplySettled());
+  t.mark(2000, true);  // boot probe: power-up sample
+  TEST_ASSERT_FALSE(t.nextReplySettled());
+  t.mark(4000, false);  // no answer
+  TEST_ASSERT_FALSE(t.nextReplySettled());
+  t.mark(6000, true);  // reply measured after the first start signal
+  TEST_ASSERT_TRUE(t.nextReplySettled());
+  t.mark(8000, false);  // a later glitch doesn't undo it
+  TEST_ASSERT_TRUE(t.nextReplySettled());
 }
 
 int main(int, char**) {
@@ -122,5 +136,6 @@ int main(int, char**) {
   RUN_TEST(test_throttle_allows_one_read_per_2s);
   RUN_TEST(test_throttle_survives_millis_wrap);
   RUN_TEST(test_throttle_due_at_is_absolute);
+  RUN_TEST(test_throttle_settles_after_two_answered_reads);
   return UNITY_END();
 }

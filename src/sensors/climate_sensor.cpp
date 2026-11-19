@@ -23,8 +23,10 @@ uint32_t ClimateSensor::prepare() {
   primed_ = kind_ != Kind::Dht11;
   if (kind_ != Kind::Dht11) return millis();
   // Replies with the old sample and starts a new conversion. Inside 2 s it returns the last
-  // transaction's result, which also tells whether that one started a conversion.
-  primed_ = dht_.read().temperature_c.ok;
+  // transaction's result, which also tells whether that one started a conversion. Right after
+  // the boot probe the next reply would still be the unsettled post-power-up sample, so the
+  // first message is null instead (the read it triggers in readPrepared() warms the sensor up).
+  primed_ = dht_.read().temperature_c.ok && dht_.nextReplySettled();
   return dht_.dueAtMs();
 }
 
