@@ -1,8 +1,7 @@
 #include "soil_sensor.h"
 
-// trimmedMean() is owned by T1 (lib/olvar_core/src/adc_filter.*). Until that lands on main
-// this file carries an equivalent private copy so the adapter builds on its own.
-// TODO(T8): drop the fallback once adc_filter.h is merged.
+// trimmedMean() comes from lib/olvar_core/src/adc_filter.*. The private copy below keeps the
+// adapter building on its own when that header isn't on the include path.
 #if __has_include("adc_filter.h")
 #include "adc_filter.h"
 #else

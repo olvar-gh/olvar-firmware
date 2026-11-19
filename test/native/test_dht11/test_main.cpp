@@ -84,7 +84,7 @@ static void test_pulses_to_bytes_uses_50us_threshold() {
 static void test_throttle_allows_one_read_per_2s() {
   Dht11Throttle t;
   TEST_ASSERT_TRUE(t.due(0));
-  t.mark(500);
+  t.mark(500, true);
   TEST_ASSERT_FALSE(t.due(500));
   TEST_ASSERT_FALSE(t.due(2499));
   TEST_ASSERT_TRUE(t.due(2500));
@@ -94,7 +94,7 @@ static void test_throttle_allows_one_read_per_2s() {
 static void test_throttle_due_at_is_absolute() {
   Dht11Throttle t;
   TEST_ASSERT_EQUAL_UINT32(100, t.dueAtMs(100));
-  t.mark(1025);
+  t.mark(1025, true);
   TEST_ASSERT_EQUAL_UINT32(3025, t.dueAtMs(1025));
   TEST_ASSERT_EQUAL_UINT32(3025, t.dueAtMs(2999));
   TEST_ASSERT_FALSE(t.due(t.dueAtMs(1025) - 1));
@@ -104,9 +104,62 @@ static void test_throttle_due_at_is_absolute() {
 
 static void test_throttle_survives_millis_wrap() {
   Dht11Throttle t;
-  t.mark(0xFFFFFF00u);
+  t.mark(0xFFFFFF00u, true);
   TEST_ASSERT_FALSE(t.due(0x00000100u));
   TEST_ASSERT_TRUE(t.due(0x00000800u));
+}
+
+// Two answered transactions are needed before a reply holds a settled sample; failures don't count.
+static void test_throttle_settles_after_two_answered_reads() {
+  Dht11Throttle t;
+  TEST_ASSERT_FALSE(t.nextReplySettled());
+  t.mark(2000, true);  // boot probe: power-up sample
+  TEST_ASSERT_FALSE(t.nextReplySettled());
+  t.mark(4000, false);  // no answer
+  TEST_ASSERT_FALSE(t.nextReplySettled());
+  t.mark(6000, true);  // reply measured after the first start signal
+  TEST_ASSERT_TRUE(t.nextReplySettled());
+  t.mark(8000, false);  // a later glitch doesn't undo it
+  TEST_ASSERT_TRUE(t.nextReplySettled());
+}
+
+// Mirrors ClimateSensor: prepare() reads the DHT11 if one is in use, readPrepared() reads again
+// (detecting it if needed) and the gate decides whether that reply is published.
+static void test_gate_nulls_dht11_first_detected_at_send_time() {
+  olvar::ClimatePublishGate g;
+  Dht11Throttle t;
+  t.mark(2000, false);           // boot probe: no answer, kind stays None
+  g.prepared(false, false, false);  // prepare() at 3990: still None
+  t.mark(4010, true);            // readPrepared() at 4010: detect() finds the DHT11, power-up sample
+  TEST_ASSERT_FALSE(g.publish(true));
+  // Next interval: prepare() reads the post-start-signal sample, readPrepared() a settled one.
+  t.mark(64000, true);
+  g.prepared(true, true, t.nextReplySettled());
+  TEST_ASSERT_TRUE(g.publish(true));
+  // Without a new prepare() the DHT11 priming is used up.
+  TEST_ASSERT_FALSE(g.publish(true));
+}
+
+static void test_gate_dht11_inside_boot_probe_window_is_null() {
+  olvar::ClimatePublishGate g;
+  Dht11Throttle t;
+  t.mark(2000, true);  // boot probe answered
+  g.prepared(true, true, t.nextReplySettled());  // prepare() within 2 s: no new transaction
+  TEST_ASSERT_FALSE(g.publish(true));
+}
+
+static void test_gate_sht31_always_publishes_once_prepared() {
+  olvar::ClimatePublishGate g;
+  TEST_ASSERT_FALSE(g.publish(false));  // never prepared
+  g.prepared(false, false, false);
+  TEST_ASSERT_TRUE(g.publish(false));  // SHT31 found at prepare or at send time
+  TEST_ASSERT_TRUE(g.publish(false));
+}
+
+static void test_gate_unanswered_dht11_prime_is_null() {
+  olvar::ClimatePublishGate g;
+  g.prepared(true, false, true);
+  TEST_ASSERT_FALSE(g.publish(true));
 }
 
 int main(int, char**) {
@@ -122,5 +175,10 @@ int main(int, char**) {
   RUN_TEST(test_throttle_allows_one_read_per_2s);
   RUN_TEST(test_throttle_survives_millis_wrap);
   RUN_TEST(test_throttle_due_at_is_absolute);
+  RUN_TEST(test_throttle_settles_after_two_answered_reads);
+  RUN_TEST(test_gate_nulls_dht11_first_detected_at_send_time);
+  RUN_TEST(test_gate_dht11_inside_boot_probe_window_is_null);
+  RUN_TEST(test_gate_sht31_always_publishes_once_prepared);
+  RUN_TEST(test_gate_unanswered_dht11_prime_is_null);
   return UNITY_END();
 }

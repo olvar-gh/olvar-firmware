@@ -32,13 +32,27 @@ static void timedPhase(const char* action, uint32_t seconds) {
   }
 }
 
+// Waits until the DHT11's 2 s window since the last transaction has surely passed on millis().
+static void waitPastDht11Window() {
+  uint32_t start = millis();
+  while (millis() - start < Dht11Throttle::kMinIntervalMs + 50) delay(10);
+}
+
 // SHT31: 5..40 C and 10..95 %RH. DHT11: its own coarse 1 C / 1 %RH part, rated 0..50 C and
 // 20..90 %RH, so the check is that range.
 void test_climate_in_room_range() {
   TEST_ASSERT_TRUE_MESSAGE(climate.kind() != ClimateSensor::Kind::None,
                            "no SHT31 at 0x44/0x45 and no DHT11 on GPIO4");
   bool dht = climate.kind() == ClimateSensor::Kind::Dht11;
-  if (dht) delay(Dht11Throttle::kMinIntervalMs);  // past the 2 s window of the boot probe
+  if (dht) {
+    // The first read after the boot probe returns a sample taken before the DHT11 settled (one
+    // gave 5 %RH there while later reads were normal): discard it and read again after 2 s.
+    // The driver counts the 2 s on millis() from the end of a transaction, and delay() can return
+    // a tick early, so wait on a millis() deadline with a margin; otherwise the read is cached.
+    waitPastDht11Window();
+    climate.read();
+    waitPastDht11Window();
+  }
   uint32_t t0 = millis();
   TempHumidity r = climate.read();
   uint32_t dt = millis() - t0;

@@ -1,9 +1,8 @@
-# olvar-firmware — Project Plan
+# olvar-firmware — Design
 
-Status: planning only. No product code exists yet.
 Scope: the ESP32 firmware that reads the plant sensors and publishes them over MQTT to the Raspberry Pi 3B gateway.
 Research date: 2026-11-16. Every non-obvious claim links to its source.
-**This plan follows the FINAL cross-repo contract decided by the user (§4).** That contract overrides the provisional one and any earlier choice in this file.
+**This design follows the final cross-repo contract (§4).** That contract overrides the provisional one and any earlier choice in this file.
 
 ---
 
@@ -13,7 +12,7 @@ Research date: 2026-11-16. Every non-obvious claim links to its source.
 - **Hardware (confirmed):** a 38-pin ESP32-WROOM-32D dev board on an expansion board with a 3.3 V/5 V jumper, plus a breadboard. Normal 2.4 GHz home Wi-Fi with no login page.
 - **Libraries:** `RobTillaart/SHT31` (temperature/humidity), `claws/BH1750` (light), `bertmelis/espMqttClient` (MQTT 3.1.1, last will), `bblanchon/ArduinoJson` 7 (payload), `tzapu/WiFiManager` (first-time Wi-Fi + MQTT settings portal). `Preferences` (NVS) comes with the core.
 - **Pins:** I2C bus on **GPIO21 (SDA) / GPIO22 (SCL)**, shared by SHT31 @ 0x44 (0x45 also accepted) and BH1750 @ 0x23, all at 3.3 V. **DHT11 fallback on GPIO4** (single-wire, 10 kΩ pull-up to 3V3), used only when no SHT31 answers at boot. Capacitive soil sensor on **GPIO34 (ADC1_CH6)**, because ADC2 can't be used while Wi-Fi is on. A **100 nF ceramic capacitor** from GPIO34 to GND is recommended (the 64-sample filter copes without it).
-- **Soil sensor:** the user's sensor is the generic 98×23 mm "Capacitive Soil Moisture Sensor" (AliExpress 1005005202930632). The seller's manual says 3.3–5.5 V supply, built-in regulator, 0–3.0 V output; it doesn't name a version (§2.3). Cheap boards often ship with defects, so instead of a chip/multimeter inspection the plan uses:
+- **Soil sensor:** a generic capacitive soil moisture sensor, 3.3–5.5 V (98×23 mm board). Its manual says built-in regulator, 0–3.0 V output; it doesn't name a version (§2.3). Cheap boards often ship with defects, so instead of a chip/multimeter inspection the design uses:
   - a **safe default wiring**: VCC on **3V3**, never 5 V;
   - a **serial sanity check** (`soilcheck`, §7.3) that compares the raw reading in air and in a glass of water.
   - The firmware sends only `soil_raw`: the 12-bit ADC count, trimmed mean of 64 samples, higher = drier.
@@ -67,7 +66,7 @@ Research date: 2026-11-16. Every non-obvious claim links to its source.
 | Output is **inverse**: dry gives a high voltage, wet a low one. At 3.3 V, typical readings are about 3.0 V in air and about 1.5 V in water. Calibrate every unit. Insert only up to the marked line. | https://tinkered.ai/components/capacitive-soil-moisture-v12 |
 | Another vendor's datasheet for the same design gives about 2.5 V in dry air and about 1.0 V submerged, and ~5 mA supply current. Typical values vary by about ±0.5 V between boards. | https://shillehtek.com/blogs/shillehtek-product-manuals/capacitive-soil-moisture-sensor-v1-2-manual |
 | An unconnected ESP32 ADC pin reads random values. | https://docs.espressif.com/projects/esp-idf/en/release-v4.4/esp32/api-reference/peripherals/adc.html |
-| **The user's listing** (AliExpress item 1005005202930632, store "SZHJW Technology Store", brand SZYTF). The title is "Capacitive Soil Moisture Sensor Corrosion Resistant". Specs only say "Analog Sensor"; neither the title nor the specs name v1.2 or v2.0. The attached manual says: "built-in voltage regulator chip", **3.3–5.5 V DC**, **output 0–3.0 V DC**, PH2.0-3P connector, 97×23×7 mm, 12 g, cable included. It doesn't say which timer chip is fitted. | https://www.aliexpress.com/item/1005005202930632.html , manual: https://ae-pic-a1.aliexpress-media.com/kf/S414c8fb7db6841a2be3a7ec722b00fd5W.pdf |
+| **The sensor used here:** a generic capacitive soil moisture sensor, 3.3–5.5 V. Its listing doesn't name v1.2 or v2.0. The seller's manual says: "built-in voltage regulator chip", **3.3–5.5 V DC**, **output 0–3.0 V DC**, PH2.0-3P connector, 97×23×7 mm, 12 g, cable included. It doesn't say which timer chip is fitted. | seller's listing and manual |
 | **Conclusion for this model:** it's the common 98×23 mm DFRobot-SEN0193-style board, sold as "v1.2" or "v2.0" depending on the batch. The seller claims a regulator, but the defects above are batch-dependent and the listing can't rule them out. So: power at 3.3 V, which is safe even if the regulator is missing, and confirm it works with the software check in §7.3. | (inference from the two rows above and §2.3 sources) |
 
 ### 2.4 Libraries
@@ -116,7 +115,7 @@ The chat Edge Function belongs to olvar-gateway and has no firmware impact.
 | Partition table | `board_build.partitions = huge_app.csv` (3 MB app, no OTA slot) | `default.csv`: 1.25 MB slots may overflow. `min_spiffs.csv`: only useful for OTA, which is out of v1 (decision F). |
 | Firmware updates | **USB only** (decision F) | ArduinoOTA / HTTP OTA: out of v1 scope. |
 | SHT31 driver | `robtillaart/SHT31 @ 0.5.3`: single-shot read, CRC checked, heater off | Adafruit: older, pulls in BusIO. Sensirion official: second choice. |
-| DHT11 fallback | Probe SHT31 0x44, then 0x45; if neither ACKs, one DHT11 read on GPIO4; keep the first that answers until reboot (none: retry on every read). Own ~60-line driver: 20 ms start pulse via `delay()`, ≤ 5 ms bit timing in a core-1 critical section, checksum checked, ≥ 2 s after power-up and from the end of one transaction to the next start (a call inside the window returns that attempt's result, so a failure stays `null`). The DHT11 replies with the sample taken after the previous read, so a due telemetry message first triggers a conversion and is sent ~2 s later with the fresh value; the loop keeps running meanwhile. Added because the SHT31 burnt out during bring-up and a bare ASAIR DHT11 was the spare. GPIO4: not a strapping pin, not flash, free on the 38-pin board. | Adafruit DHT library: pulls in Adafruit Unified Sensor for two numbers. RMT-based reader: more code for a read once a minute. Runtime switching between sensors: not needed. |
+| DHT11 fallback | Probe SHT31 0x44, then 0x45; if neither ACKs, one DHT11 read on GPIO4; keep the first that answers until reboot (none: retry on every read). Own ~60-line driver: 20 ms start pulse via `delay()`, ≤ 5 ms bit timing in a core-1 critical section, checksum checked, ≥ 2 s after power-up and from the end of one transaction to the next start (a call inside the window returns that attempt's result, so a failure stays `null`). The DHT11 replies with the sample taken after the previous read, so a due telemetry message first triggers a conversion and is sent ~2 s later with the fresh value; the loop keeps running meanwhile. The first two replies after power-up can be unsettled (5 %RH seen on real hardware), so a message whose reply would be one of them sends `null`. Added because the SHT31 burnt out during bring-up and a bare ASAIR DHT11 was the spare. GPIO4: not a strapping pin, not flash, free on the 38-pin board. | Adafruit DHT library: pulls in Adafruit Unified Sensor for two numbers. RMT-based reader: more code for a read once a minute. Runtime switching between sensors: not needed. |
 | BH1750 driver | `claws/BH1750 @ 1.3.0`, `ONE_TIME_HIGH_RES_MODE` | `hp_BH1750`: fine, less common. Continuous mode: no benefit at 60 s. |
 | MQTT client | `bertmelis/espMqttClient @ 1.7.3`, sync client over `WiFiClient` | **PubSubClient**: unmaintained. **arduino-mqtt**: blocking `loop()`, small buffers. **ESP32MQTTClient**: hides reconnect logic. |
 | JSON | `bblanchon/ArduinoJson @ 7.4.3` | Hand-written `snprintf`: error-prone with `null`. |
@@ -129,7 +128,7 @@ The chat Edge Function belongs to olvar-gateway and has no firmware impact.
 | `boot_id` | 8 lowercase hex chars from `esp_random()`, generated once per boot after Wi-Fi starts (hardware RNG) | MAC- or counter-based ids: not random; an NVS boot counter wears flash for no benefit. |
 | Soil sampling | Sensor powered from 3V3 all the time. 64 samples ~1 ms apart: sort, drop the lowest and highest 16, average the middle 32. Report the 12-bit count. 100 nF on the pin. | Power from a GPIO: a board with the R4 defect then needs long settling. `analogReadMilliVolts`: the contract field is a raw count. |
 | Soil calibration | **None in firmware** (decision D). Dry/wet values live in the database and are set from the dashboard. | Serial `cal` commands / NVS calibration (earlier draft): removed. |
-| Soil sensor pre-check | **No chip reading, no multimeter.** VCC on 3V3. The serial `soilcheck` command streams `soil_raw` and judges the air/water span (§7.3). It's diagnostic only: nothing is stored or sent, so it doesn't conflict with decision D. | Visual chip check + multimeter (earlier draft): the user can't identify the chips. Feeding 5 V: if the regulator is missing on the delivered board, AOUT could exceed 3.3 V and damage GPIO34. |
+| Soil sensor pre-check | **No chip reading, no multimeter.** VCC on 3V3. The serial `soilcheck` command streams `soil_raw` and judges the air/water span (§7.3). It's diagnostic only: nothing is stored or sent, so it doesn't conflict with decision D. | Visual chip check + multimeter: the chip markings are hard to identify without experience. Feeding 5 V: if the regulator is missing on the delivered board, AOUT could exceed 3.3 V and damage GPIO34. |
 | Interval | Fixed **60 s** compile-time constant (`OLVAR_INTERVAL_S`), not a portal field (decision E) | Configurable interval: not needed for v1. |
 | Power | USB 5 V from a ≥1 A charger. **No deep sleep.** Default Wi-Fi modem-sleep. | Deep sleep: the MQTT connection and retained status would flap on every wake, for no gain on USB. |
 | Watchdogs | No successful publish for 10 min → `ESP.restart()`, plus the core's task watchdog | Restart on any Wi-Fi drop: too aggressive. |
@@ -138,7 +137,7 @@ The chat Edge Function belongs to olvar-gateway and has no firmware impact.
 
 ## 4. Contract changes
 
-The user's **FINAL contract** replaces the provisional one. Below is the firmware-facing part as the firmware will implement it, then what changed relative to the provisional contract and my first draft. Nothing is still open on the firmware side.
+The **final contract** replaces the provisional one. Below is the firmware-facing part as the firmware implements it, then what changed relative to the provisional contract and the first draft. Nothing is still open on the firmware side.
 
 ### 4.1 Final firmware contract
 - **Transport:** Wi-Fi to the Mosquitto broker on the Pi 3B, port 1883, unencrypted on the LAN, per-device password. **MQTT username = client id = `device_id`** (gateway ACL: a device may write only `olvar/v1/<username>/…`).
@@ -165,17 +164,17 @@ The user's **FINAL contract** replaces the provisional one. Below is the firmwar
 - **No device-side buffering:** while the broker is unreachable, readings are dropped.
 
 ### 4.2 What changed
-| Item | Provisional contract / my first draft | Final |
+| Item | Provisional contract / first draft | Final |
 |---|---|---|
-| Telemetry QoS | my draft: QoS 0 | **QoS 1**, unacked telemetry discarded on disconnect |
+| Telemetry QoS | first draft: QoS 0 | **QoS 1**, unacked telemetry discarded on disconnect |
 | `boot_id` | absent | **added**, 8 hex, random per boot |
 | `soil_pct` | sent by firmware, calibration in NVS via serial `cal` | **removed from firmware**; calibration in the DB via the dashboard; `soil_pct` computed server-side |
-| Nullable fields, no NaN | my proposal | **adopted** |
-| `rssi_dbm` optional, unknown fields ignored | my proposal | **adopted** |
-| Dedup key | my draft: `(device_id, seq, uptime_ms)` | `(device_id, boot_id, seq)` |
+| Nullable fields, no NaN | firmware proposal | **adopted** |
+| `rssi_dbm` optional, unknown fields ignored | firmware proposal | **adopted** |
+| Dedup key | first draft: `(device_id, seq, uptime_ms)` | `(device_id, boot_id, seq)` |
 | Interval | configurable 10–3600 s | **fixed 60 s** |
 | OTA | optional ArduinoOTA | **removed**; USB only |
-| `device_id` rule | my draft: `[a-z0-9-]{1,32}` | gateway rule `^[a-z0-9][a-z0-9-]{2,31}$`, `olvar-gateway` reserved; MQTT username = device_id |
+| `device_id` rule | first draft: `[a-z0-9-]{1,32}` | gateway rule `^[a-z0-9][a-z0-9-]{2,31}$`, `olvar-gateway` reserved; MQTT username = device_id |
 
 ---
 
@@ -278,9 +277,9 @@ T0 must confirm that `extra_configs` tolerates a missing `secrets.ini`. If it do
 
 ## 6. Task breakdown
 
-**Ordering:** T0 runs first and alone. After that, T1–T7 own disjoint files and can run in parallel. T8 integrates them last.
+**Ordering:** T0 comes first. After that, T1–T7 own disjoint files and are independent of each other. T8 integrates them last.
 
-**Shared interfaces:** the signatures below are binding so that parallel workers agree. A worker who needs a change appends it to `.kitchen/notes.md`.
+**Shared interfaces:** the signatures below are the contract between the modules.
 
 ```cpp
 // lib/olvar_core/src/reading.h  (created by T0, read-only for others)
@@ -353,7 +352,7 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 - Run the simulator against a local broker with `mosquitto_sub -v` and check that `seq` increments and `boot_id` is stable until a simulated reboot.
 - Optionally `npx ajv-cli validate -s docs/contract/telemetry.schema.json -d docs/contract/telemetry.example.json`.
 
-No hardware. Post the fixture and simulator paths in notes for the gateway worker.
+No hardware. The gateway reuses the fixtures and the simulator.
 
 ### T3 — Settings model, CLI parser, backoff/timer (olvar_core)
 **Owns:** `lib/olvar_core/src/settings.*`, `lib/olvar_core/src/cli.*`, `lib/olvar_core/src/backoff.*`, `test/native/test_settings/`, `test/native/test_cli/`, `test/native/test_backoff/`.
@@ -472,7 +471,7 @@ No hardware. Post the fixture and simulator paths in notes for the gateway worke
 
 ---
 
-## 7. Things the user must do by hand
+## 7. Manual setup steps
 
 ### 7.1 Installs (your Mac)
 1. Install PlatformIO Core: `brew install platformio`, `pipx install platformio`, or the VS Code "PlatformIO IDE" extension. Native tests also need `xcode-select --install`. Guide: https://docs.platformio.org/en/latest/core/installation/index.html
@@ -484,12 +483,12 @@ No hardware. Post the fixture and simulator paths in notes for the gateway worke
 
 ### 7.3 Soil sensor: safe wiring and software check (no chip reading, no multimeter)
 
-**Your model:** the generic "Capacitive Soil Moisture Sensor" from AliExpress item 1005005202930632. The seller's manual says 3.3–5.5 V, a built-in regulator and 0–3.0 V output; the version isn't stated (§2.3). It comes with a 3-wire cable: **red = VCC, black = GND, yellow = AOUT**. The pin names are also printed on the board next to the white connector.
+**Your model:** a generic capacitive soil moisture sensor, 3.3–5.5 V. The seller's manual says a built-in regulator and 0–3.0 V output; the version isn't stated (§2.3). Its three pins are **VCC**, **GND** and **AOUT**. The usual cable colours are red = VCC, black = GND, yellow = AOUT, but not every board uses them, so **check the pin labels printed on your board next to the connector, or its datasheet, before applying power** and follow the labels, not the colours.
 
 **Safe default wiring (always use this):**
-- Red **VCC → 3V3**: the board's 3V3 pin, or any expansion-board V pin with the jumper on 3.3 V. **Never 5V or VIN.** If your board happens to lack the regulator, 5 V could push AOUT above 3.3 V and damage GPIO34. At 3.3 V that can't happen, and a board with a regulator works fine on 3.3 V.
-- Black **GND → GND**.
-- Yellow **AOUT → GPIO34**, plus (recommended) a 100 nF capacitor from GPIO34 to GND (§7.4).
+- **VCC → 3V3**: the board's 3V3 pin, or any expansion-board V pin with the jumper on 3.3 V. **Never 5V or VIN.** If your board happens to lack the regulator, 5 V could push AOUT above 3.3 V and damage GPIO34. At 3.3 V that can't happen, and a board with a regulator works fine on 3.3 V.
+- **GND → GND**.
+- **AOUT → GPIO34**, plus (recommended) a 100 nF capacitor from GPIO34 to GND (§7.4).
 - Don't put it in the pot yet. Before the check, wipe the blade dry.
 
 **Software check** (after flashing; takes ~2 minutes):
@@ -502,12 +501,12 @@ No hardware. Post the fixture and simulator paths in notes for the gateway worke
 
 | Verdict (checked in this order) | Rule | What it means → what to do |
 |---|---|---|
-| **Saturated** | air min ≥ 4000 | The pin sees ≥ ~3.1 V. **Unplug the red wire now.** Make sure it's on **3V3**, not 5V/VIN, and that yellow (not red) goes to GPIO34. Then re-run. |
-| **NoSignal** | air max < 300 | Nothing reaches GPIO34, or the sensor has no power. Re-seat all three wires and check that yellow is on **GPIO34** (not 35/32) and red/black aren't swapped. Re-run. |
-| **Noisy** | max − min > 300 within the air phase | The value jumps around: a loose wire or a floating pin (an unconnected ADC pin reads random values). Push the yellow wire in firmly, check the 100 nF capacitor sits between GPIO34 and GND, use shorter wires, re-run. |
+| **Saturated** | air min ≥ 4000 | The pin sees ≥ ~3.1 V. **Unplug the VCC wire now.** Make sure it's on **3V3**, not 5V/VIN, and that AOUT (not VCC) goes to GPIO34. Then re-run. |
+| **NoSignal** | air max < 300 | Nothing reaches GPIO34, or the sensor has no power. Re-seat all three wires and check that AOUT is on **GPIO34** (not 35/32) and VCC/GND aren't swapped. Re-run. |
+| **Noisy** | max − min > 300 within the air phase | The value jumps around: a loose wire or a floating pin (an unconnected ADC pin reads random values). Push the AOUT wire in firmly, check the 100 nF capacitor sits between GPIO34 and GND, use shorter wires, re-run. |
 | **Swapped** | water value > air value + 150 | The steps were probably done in the wrong order. Re-run: air first, then water. |
 | **Stuck** | span < 150 | The sensor doesn't react to water. Its oscillator isn't running, which is typical of boards with a 5 V-only timer chip, or it's a dead board. **Replace the sensor**; they're about $1–2. When reordering, choose a listing whose photos show "TLC555" on the chip, or a branded one (DFRobot SEN0193). |
-| **Slow** | water value not settled (within ±30) after 15 s, or still drifting at 30 s | The reading follows water very slowly: the known "floating 1 MΩ resistor" defect. Fix without soldering: plug a **1 MΩ resistor** (colour bands brown-black-green) into the breadboard **between the yellow AOUT row and a GND row**. Re-run; it should now settle in a few seconds. If it's still slow, replace the sensor. |
+| **Slow** | water value not settled (within ±30) after 15 s, or still drifting at 30 s | The reading follows water very slowly: the known "floating 1 MΩ resistor" defect. Fix without soldering: plug a **1 MΩ resistor** (colour bands brown-black-green) into the breadboard **between the AOUT row and a GND row**. Re-run; it should now settle in a few seconds. If it's still slow, replace the sensor. |
 | **SmallSpan** | 150 ≤ span < 600 | It reacts, but weakly. Make sure the blade is in water **up to the line** and was **dry** for the air step, then re-run. If the span stays small it still works, but with coarse resolution; replace when convenient. |
 | **OK** | everything else (span ≥ 600) | Good. Dry the sensor, then insert it into the pot up to the line, always at the same depth and spot. |
 
@@ -529,9 +528,9 @@ After a passing check, protect the sensor: coat the cut PCB edges along the blad
 | 8 | GY-302 **SDA** | SDA row (→ GPIO21) | |
 | 9 | GY-302 **SCL** | SCL row (→ GPIO22) | |
 | 10 | GY-302 **ADDR** | **GND** or leave unconnected | → address **0x23**; never 5 V |
-| 11 | Soil sensor **VCC** (red) | **3V3** | |
-| 12 | Soil sensor **GND** (black) | **GND** | |
-| 13 | Soil sensor **AOUT** (yellow) | **GPIO34** | ADC1_CH6, input-only; **not** an ADC2 pin |
+| 11 | Soil sensor **VCC** (often red) | **3V3** | |
+| 12 | Soil sensor **GND** (often black) | **GND** | |
+| 13 | Soil sensor **AOUT** (often yellow) | **GPIO34** | ADC1_CH6, input-only; **not** an ADC2 pin |
 | 14 | 100 nF ceramic capacitor ("104"), recommended | between **GPIO34** and **GND**, close to the ESP32 | ADC noise; optional thanks to the 64-sample filter |
 | 15 | USB cable | ESP32 board's USB port → 5 V ≥1 A charger (or your Mac while flashing) | |
 
@@ -560,10 +559,10 @@ USB only: plug in the Mac and run `pio run -t upload`. Settings in NVS survive a
 
 ---
 
-## 8. Risks and open questions for the user
+## 8. Risks and open questions
 
 ### Open questions
-The final decisions answer the earlier questions (board, Wi-Fi, OTA, soil scale, interval). **No firmware question is still open.** The listing doesn't say which version of the soil sensor you'll receive, so whether it works is only known after the `soilcheck` in §7.3 (no tools needed). If the verdict is **Stuck**, order a replacement before T4's hardware verification.
+The final decisions answer the earlier questions (board, Wi-Fi, OTA, soil scale, interval). **No firmware question is still open.** The listing doesn't say which version of the soil sensor you'll receive, so whether it works is only known after the `soilcheck` in §7.3 (no tools needed). If the verdict is **Stuck**, get a replacement before T4's hardware verification.
 
 ### Risks
 | Risk | Likelihood | Mitigation |
