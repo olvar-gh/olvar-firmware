@@ -23,6 +23,9 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'lib/olvar_core/library.json') }}
       - name: Install PlatformIO Core
         run: pip install platformio==6.1.19
+      - name: No em dashes (project rule)
+        run: |
+          ! git grep -n "$(printf '\342\200\224')"
       - name: Native tests
         run: pio test -e native
       - name: Firmware build
