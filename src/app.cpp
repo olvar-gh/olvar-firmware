@@ -80,7 +80,14 @@ void App::loop() {
   mqtt_.loop(wifi_.connected());
   led_.setMode(ledModeFor(wifi_.connected(), mqtt_.connected()));
 
-  if (schedule_.due(millis(), mqtt_.connected())) sendTelemetry();
+  if (schedule_.due(millis(), mqtt_.connected())) {
+    sendAtMs_ = millis() + climate_.prepare();
+    sendPending_ = true;
+  }
+  if (sendPending_ && static_cast<int32_t>(millis() - sendAtMs_) >= 0) {
+    sendPending_ = false;
+    sendTelemetry();
+  }
   led_.update();
 }
 

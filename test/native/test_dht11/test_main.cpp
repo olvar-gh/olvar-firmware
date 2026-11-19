@@ -41,10 +41,27 @@ static void test_negative_temperature() {
   TEST_ASSERT_FLOAT_WITHIN(0.001f, -5.2f, r.temperature_c.v);
 }
 
+// Aosong DHT11 datasheet (2022-12) §5.2 example: 52.1 %RH, -24.12 C.
+static void test_datasheet_example_frame() {
+  const uint8_t bytes[5] = {0x34, 0x01, 0x18, 0x8C, 0xD9};
+  TempHumidity r = dht11Decode(bytes);
+  TEST_ASSERT_TRUE(r.temperature_c.ok);
+  TEST_ASSERT_TRUE(r.humidity_pct.ok);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 52.1f, r.humidity_pct.v);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, -24.12f, r.temperature_c.v);
+}
+
+static void test_two_digit_fractions() {
+  const uint8_t bytes[5] = {40, 25, 21, 7, static_cast<uint8_t>(40 + 25 + 21 + 7)};
+  TempHumidity r = dht11Decode(bytes);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 40.25f, r.humidity_pct.v);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 21.7f, r.temperature_c.v);
+}
+
 static void test_out_of_range_gives_null() {
   const uint8_t wetter[5] = {101, 0, 20, 0, 121};
   TEST_ASSERT_FALSE(dht11Decode(wetter).humidity_pct.ok);
-  const uint8_t hot[5] = {40, 0, 61, 0, 101};
+  const uint8_t hot[5] = {40, 0, 81, 0, 121};
   TEST_ASSERT_FALSE(dht11Decode(hot).temperature_c.ok);
 }
 
@@ -73,6 +90,15 @@ static void test_throttle_allows_one_read_per_2s() {
   TEST_ASSERT_TRUE(t.due(2500));
 }
 
+static void test_throttle_reports_time_until_due() {
+  Dht11Throttle t;
+  TEST_ASSERT_EQUAL_UINT32(0, t.msUntilDue(100));
+  t.mark(1000);
+  TEST_ASSERT_EQUAL_UINT32(2000, t.msUntilDue(1000));
+  TEST_ASSERT_EQUAL_UINT32(1, t.msUntilDue(2999));
+  TEST_ASSERT_EQUAL_UINT32(0, t.msUntilDue(3000));
+}
+
 static void test_throttle_survives_millis_wrap() {
   Dht11Throttle t;
   t.mark(0xFFFFFF00u);
@@ -86,9 +112,12 @@ int main(int, char**) {
   RUN_TEST(test_bad_checksum_gives_null);
   RUN_TEST(test_all_zero_frame_gives_null);
   RUN_TEST(test_negative_temperature);
+  RUN_TEST(test_datasheet_example_frame);
+  RUN_TEST(test_two_digit_fractions);
   RUN_TEST(test_out_of_range_gives_null);
   RUN_TEST(test_pulses_to_bytes_uses_50us_threshold);
   RUN_TEST(test_throttle_allows_one_read_per_2s);
   RUN_TEST(test_throttle_survives_millis_wrap);
+  RUN_TEST(test_throttle_reports_time_until_due);
   return UNITY_END();
 }

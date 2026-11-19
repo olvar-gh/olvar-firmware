@@ -4,7 +4,7 @@ namespace olvar {
 
 namespace {
 
-constexpr uint32_t kPowerUpMs = 1000;      // datasheet: send no command in the first second
+constexpr uint32_t kPowerUpMs = 2000;      // datasheet §5.4: no start signal in the first 2 s
 constexpr uint32_t kStartLowMs = 20;       // host start signal, >= 18 ms
 constexpr uint32_t kPhaseTimeoutUs = 100;  // every sensor phase is <= 80 us
 
@@ -30,16 +30,15 @@ void Dht11Sensor::begin() {
   // Open drain: LOW pulls the line down, HIGH releases it to the pull-up. Input stays enabled.
   pinMode(pin_, OUTPUT_OPEN_DRAIN | PULLUP);
   digitalWrite(pin_, HIGH);
-  uint32_t now = millis();
-  if (now < kPowerUpMs) delay(kPowerUpMs - now);
 }
 
 TempHumidity Dht11Sensor::read() {
   uint32_t now = millis();
-  if (!throttle_.due(now)) return last_;
-  throttle_.mark(now);
+  if (now < kPowerUpMs) delay(kPowerUpMs - now);
+  if (!throttle_.due(millis())) return last_;
   uint8_t bytes[5];
   last_ = readFrame(bytes) ? dht11Decode(bytes) : TempHumidity{};
+  throttle_.mark(millis());  // the 2 s count from the end of the transaction
   return last_;
 }
 

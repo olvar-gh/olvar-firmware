@@ -18,6 +18,13 @@ TempHumidity ClimateSensor::read() {
   return kind_ == Kind::Sht31 ? sht_->read() : dht_.read();
 }
 
+uint32_t ClimateSensor::prepare() {
+  if (kind_ == Kind::None) detect();
+  if (kind_ != Kind::Dht11) return 0;
+  dht_.read();  // replies with the old sample and starts a new conversion (no-op inside 2 s)
+  return dht_.msUntilDue();
+}
+
 bool ClimateSensor::detect() {
   for (Sht31Sensor* s : {&sht44_, &sht45_}) {
     // probe() first: a plain ACK check that doesn't count as a failed read on the bus.

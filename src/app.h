@@ -87,6 +87,9 @@ class App {
   StatusLed led_;
   SerialCli console_;
   TelemetrySchedule schedule_;
+  // A due message waits here while a DHT11 converts a fresh sample (~2 s); 0 with an SHT31.
+  bool sendPending_ = false;
+  uint32_t sendAtMs_ = 0;
   Settings settings_;
   char bootId_[9] = {};
 };

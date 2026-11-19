@@ -135,8 +135,8 @@ Type these commands in the monitor and press Enter:
       shows which temperature/humidity sensor is in use.
 - [ ] `raw`: one line like
       `soil_raw=3120 temperature_c=23.41 humidity_pct=51.07 lux=312.5 (temp/humidity: SHT31 at 0x44)`.
-  - SHT31: temperature 5–40 °C and humidity 10–95 %. DHT11: 0–50 °C and 20–90 %, in whole
-    numbers (`23.00`). Within 2 s of the last DHT11 read, `raw` repeats that read.
+  - SHT31: temperature 5–40 °C and humidity 10–95 %. DHT11: 0–50 °C and 20–90 %, usually in
+    whole numbers (`23.00`). Within 2 s of the last DHT11 read, `raw` repeats that read.
   - Lux above 0 in room light and ≤ 5 when you cover the GY-302 with your finger: the BH1750 works.
   - `null` for a value means that sensor did not answer: recheck its wires.
 - [ ] `soilcheck`: follow the prompts (sensor in the air, then in a glass of water up to the white
@@ -169,11 +169,12 @@ Once this works, place the soil sensor in the pot and calibrate it in the dashbo
 
 These confirm the firmware on real hardware. Run them once before calling the release done.
 
-**One sensor unplugged.** While telemetry is flowing, pull the SHT31's VIN wire (or the DHT11's
-pin 1 wire).
+**One sensor unplugged.** While telemetry is flowing, pull the SHT31's VIN wire. With a DHT11,
+pull the wire from its pin 2 (DATA) row to **GPIO4** instead and leave it powered: without power,
+the pull-up on DATA would feed the sensor through its data pin.
 - [ ] The next messages have `"temperature_c":null,"humidity_pct":null`; `lux` and `soil_raw` are
       still numbers.
-- [ ] Plug VIN back in: within a minute or two the values return, without a reboot (`boot_id`
+- [ ] Plug the wire back in: within a minute or two the values return, without a reboot (`boot_id`
       unchanged).
 
 **Broker outage.** On the Pi: `sudo systemctl stop mosquitto`, wait 2 minutes, then

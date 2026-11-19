@@ -119,8 +119,11 @@ resistor's legs into the pin 2 row and the 3V3 row. Leave the SHT31 out. Placeme
 for the SHT31: 15–20 cm away from the ESP32 and the charger.
 
 GPIO4 is not a boot-strapping pin, so the pull-up doesn't change how the board starts. The
-firmware reads the DHT11 at most once every 2 s (its limit); a read with a bad checksum or no
-answer is sent as `null`, never as an old value. `status` and `raw` in the serial monitor show
+firmware waits 2 s after power-up and 2 s after each read before talking to the DHT11 again (its
+limits). The DHT11 answers with the sample it took after the previous read, so each telemetry
+message reads it twice, 2 s apart, and sends the second, current value; that message goes out
+about 2 s later than with an SHT31. A read with a bad checksum or no answer is sent as `null`,
+never as an old value. `status` and `raw` in the serial monitor show
 which sensor is in use (`DHT11 on GPIO4` or `SHT31 at 0x44`).
 
 ## Soil sensor: safe wiring and software check
