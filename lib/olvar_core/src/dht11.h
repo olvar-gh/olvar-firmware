@@ -48,4 +48,28 @@ class Dht11Throttle {
   uint8_t answered_ = 0;
 };
 
+// Decides whether the temperature/humidity reply read at send time may be published. An SHT31
+// reply is always fresh. A DHT11 reply only counts if the DHT11 was already in use at prepare
+// time, answered that read (so a new conversion started) and its next reply is settled. A DHT11
+// first detected at send time replies with its unsettled power-up sample, so that one is null.
+class ClimatePublishGate {
+ public:
+  // At prepare time. dht: a DHT11 is in use; answered: its read answered; settled:
+  // Dht11Throttle::nextReplySettled() after that read.
+  void prepared(bool dht, bool answered, bool settled) {
+    preparedDht_ = dht;
+    primed_ = !dht || (answered && settled);
+  }
+  // At send time, after the read. dht: a DHT11 is in use now. Consumes the DHT11 priming.
+  bool publish(bool dht) {
+    bool ok = primed_ && (!dht || preparedDht_);
+    primed_ = primed_ && !dht;
+    return ok;
+  }
+
+ private:
+  bool primed_ = false;
+  bool preparedDht_ = false;
+};
+
 }  // namespace olvar

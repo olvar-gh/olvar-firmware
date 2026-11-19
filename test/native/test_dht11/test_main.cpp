@@ -123,6 +123,45 @@ static void test_throttle_settles_after_two_answered_reads() {
   TEST_ASSERT_TRUE(t.nextReplySettled());
 }
 
+// Mirrors ClimateSensor: prepare() reads the DHT11 if one is in use, readPrepared() reads again
+// (detecting it if needed) and the gate decides whether that reply is published.
+static void test_gate_nulls_dht11_first_detected_at_send_time() {
+  olvar::ClimatePublishGate g;
+  Dht11Throttle t;
+  t.mark(2000, false);           // boot probe: no answer, kind stays None
+  g.prepared(false, false, false);  // prepare() at 3990: still None
+  t.mark(4010, true);            // readPrepared() at 4010: detect() finds the DHT11, power-up sample
+  TEST_ASSERT_FALSE(g.publish(true));
+  // Next interval: prepare() reads the post-start-signal sample, readPrepared() a settled one.
+  t.mark(64000, true);
+  g.prepared(true, true, t.nextReplySettled());
+  TEST_ASSERT_TRUE(g.publish(true));
+  // Without a new prepare() the DHT11 priming is used up.
+  TEST_ASSERT_FALSE(g.publish(true));
+}
+
+static void test_gate_dht11_inside_boot_probe_window_is_null() {
+  olvar::ClimatePublishGate g;
+  Dht11Throttle t;
+  t.mark(2000, true);  // boot probe answered
+  g.prepared(true, true, t.nextReplySettled());  // prepare() within 2 s: no new transaction
+  TEST_ASSERT_FALSE(g.publish(true));
+}
+
+static void test_gate_sht31_always_publishes_once_prepared() {
+  olvar::ClimatePublishGate g;
+  TEST_ASSERT_FALSE(g.publish(false));  // never prepared
+  g.prepared(false, false, false);
+  TEST_ASSERT_TRUE(g.publish(false));  // SHT31 found at prepare or at send time
+  TEST_ASSERT_TRUE(g.publish(false));
+}
+
+static void test_gate_unanswered_dht11_prime_is_null() {
+  olvar::ClimatePublishGate g;
+  g.prepared(true, false, true);
+  TEST_ASSERT_FALSE(g.publish(true));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_decodes_a_good_frame);
@@ -137,5 +176,9 @@ int main(int, char**) {
   RUN_TEST(test_throttle_survives_millis_wrap);
   RUN_TEST(test_throttle_due_at_is_absolute);
   RUN_TEST(test_throttle_settles_after_two_answered_reads);
+  RUN_TEST(test_gate_nulls_dht11_first_detected_at_send_time);
+  RUN_TEST(test_gate_dht11_inside_boot_probe_window_is_null);
+  RUN_TEST(test_gate_sht31_always_publishes_once_prepared);
+  RUN_TEST(test_gate_unanswered_dht11_prime_is_null);
   return UNITY_END();
 }

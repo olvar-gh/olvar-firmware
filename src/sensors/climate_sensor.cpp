@@ -20,20 +20,23 @@ TempHumidity ClimateSensor::read() {
 
 uint32_t ClimateSensor::prepare() {
   if (kind_ == Kind::None) detect();
-  primed_ = kind_ != Kind::Dht11;
-  if (kind_ != Kind::Dht11) return millis();
+  if (kind_ != Kind::Dht11) {
+    gate_.prepared(false, false, false);
+    return millis();
+  }
   // Replies with the old sample and starts a new conversion. Inside 2 s it returns the last
   // transaction's result, which also tells whether that one started a conversion. Right after
   // the boot probe the next reply would still be the unsettled post-power-up sample, so the
   // first message is null instead (the read it triggers in readPrepared() warms the sensor up).
-  primed_ = dht_.read().temperature_c.ok && dht_.nextReplySettled();
+  bool answered = dht_.read().temperature_c.ok;
+  gate_.prepared(true, answered, dht_.nextReplySettled());
   return dht_.dueAtMs();
 }
 
 TempHumidity ClimateSensor::readPrepared() {
   TempHumidity r = read();
-  if (!primed_) return {};
-  primed_ = kind_ != Kind::Dht11;
+  // read() may detect a DHT11 only now; its reply is then the unsettled probe sample.
+  if (!gate_.publish(kind_ == Kind::Dht11)) return {};
   return r;
 }
 
