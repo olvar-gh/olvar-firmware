@@ -22,7 +22,7 @@ class Dht11Sensor {
   // The DHT11 replies with the sample it took after the previous transaction and then measures
   // again, so a current value needs two reads 2 s apart (ClimateSensor::prepare()).
   TempHumidity read();
-  uint32_t msUntilDue() const { return throttle_.msUntilDue(millis()); }
+  uint32_t dueAtMs() const { return throttle_.dueAtMs(millis()); }
 
  private:
   bool readFrame(uint8_t bytes[5]);

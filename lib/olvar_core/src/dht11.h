@@ -29,7 +29,8 @@ class Dht11Throttle {
   static constexpr uint32_t kMinIntervalMs = 2000;
 
   bool due(uint32_t nowMs) const { return !started_ || nowMs - lastMs_ >= kMinIntervalMs; }
-  uint32_t msUntilDue(uint32_t nowMs) const { return due(nowMs) ? 0 : kMinIntervalMs - (nowMs - lastMs_); }
+  // Absolute millis() at which the next transaction may start (nowMs if it already may).
+  uint32_t dueAtMs(uint32_t nowMs) const { return due(nowMs) ? nowMs : lastMs_ + kMinIntervalMs; }
   // Call when a transaction has ended.
   void mark(uint32_t nowMs) {
     started_ = true;

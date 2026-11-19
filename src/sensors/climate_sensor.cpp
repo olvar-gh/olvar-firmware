@@ -20,9 +20,19 @@ TempHumidity ClimateSensor::read() {
 
 uint32_t ClimateSensor::prepare() {
   if (kind_ == Kind::None) detect();
-  if (kind_ != Kind::Dht11) return 0;
-  dht_.read();  // replies with the old sample and starts a new conversion (no-op inside 2 s)
-  return dht_.msUntilDue();
+  primed_ = kind_ != Kind::Dht11;
+  if (kind_ != Kind::Dht11) return millis();
+  // Replies with the old sample and starts a new conversion. Inside 2 s it returns the last
+  // transaction's result, which also tells whether that one started a conversion.
+  primed_ = dht_.read().temperature_c.ok;
+  return dht_.dueAtMs();
+}
+
+TempHumidity ClimateSensor::readPrepared() {
+  TempHumidity r = read();
+  if (!primed_) return {};
+  primed_ = kind_ != Kind::Dht11;
+  return r;
 }
 
 bool ClimateSensor::detect() {

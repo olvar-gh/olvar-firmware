@@ -90,13 +90,16 @@ static void test_throttle_allows_one_read_per_2s() {
   TEST_ASSERT_TRUE(t.due(2500));
 }
 
-static void test_throttle_reports_time_until_due() {
+// The deadline is anchored to the end of the transaction, not to when the caller asks.
+static void test_throttle_due_at_is_absolute() {
   Dht11Throttle t;
-  TEST_ASSERT_EQUAL_UINT32(0, t.msUntilDue(100));
-  t.mark(1000);
-  TEST_ASSERT_EQUAL_UINT32(2000, t.msUntilDue(1000));
-  TEST_ASSERT_EQUAL_UINT32(1, t.msUntilDue(2999));
-  TEST_ASSERT_EQUAL_UINT32(0, t.msUntilDue(3000));
+  TEST_ASSERT_EQUAL_UINT32(100, t.dueAtMs(100));
+  t.mark(1025);
+  TEST_ASSERT_EQUAL_UINT32(3025, t.dueAtMs(1025));
+  TEST_ASSERT_EQUAL_UINT32(3025, t.dueAtMs(2999));
+  TEST_ASSERT_FALSE(t.due(t.dueAtMs(1025) - 1));
+  TEST_ASSERT_TRUE(t.due(t.dueAtMs(1025)));
+  TEST_ASSERT_EQUAL_UINT32(3100, t.dueAtMs(3100));
 }
 
 static void test_throttle_survives_millis_wrap() {
@@ -118,6 +121,6 @@ int main(int, char**) {
   RUN_TEST(test_pulses_to_bytes_uses_50us_threshold);
   RUN_TEST(test_throttle_allows_one_read_per_2s);
   RUN_TEST(test_throttle_survives_millis_wrap);
-  RUN_TEST(test_throttle_reports_time_until_due);
+  RUN_TEST(test_throttle_due_at_is_absolute);
   return UNITY_END();
 }

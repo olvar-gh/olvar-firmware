@@ -19,9 +19,12 @@ class ClimateSensor {
   // Probes SHT31 0x44, SHT31 0x45, then the DHT11. False when none answers; read() then keeps
   // probing on every call and returns null until one does.
   bool begin();
-  // Call before a read() whose value is published. With a DHT11 it starts a fresh conversion and
-  // returns how many ms to wait before read() returns it; 0 for an SHT31 (read() is always fresh).
+  // Call before readPrepared(). With a DHT11 it starts a fresh conversion and returns the
+  // millis() at which readPrepared() gets it; for an SHT31 it returns millis() (always fresh).
   uint32_t prepare();
+  // The value to publish: like read(), but null when the DHT11 didn't answer the prepare() read,
+  // since then no new conversion was started and the next frame would hold an older sample.
+  TempHumidity readPrepared();
   TempHumidity read();
 
   Kind kind() const { return kind_; }
@@ -36,6 +39,7 @@ class ClimateSensor {
   Dht11Sensor dht_;
   Sht31Sensor* sht_ = nullptr;
   Kind kind_ = Kind::None;
+  bool primed_ = false;
   char name_[16] = "none";
 };
 
