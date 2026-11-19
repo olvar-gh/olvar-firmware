@@ -29,14 +29,14 @@ class FakeStream : public Stream {
 };
 
 static I2cBus bus;
-static Sht31Sensor sht(bus);
+static ClimateSensor climate(bus);
 static Bh1750Sensor bh(bus);
 static SoilSensor soil;
 static FakeStream io;
 static int portalRequests = 0;
 static int reboots = 0;
 
-static SerialCli shell(io, sht, bh, soil,
+static SerialCli shell(io, climate, bh, soil,
                        CliHooks{[](CliStatus& s) {
                                   s.device_id = "olvar-a1b2c3";
                                   s.boot_id = "9f3c07ab";
@@ -71,7 +71,7 @@ void test_help_and_unknown() {
 void test_status_prints_every_field() {
   run("status\n");
   for (const char* key : {"device_id olvar-a1b2c3", "boot_id   9f3c07ab", "wifi", "mqtt      disconnected",
-                          "seq       42", "skipped   3", "heap"}) {
+                          "seq       42", "skipped   3", "climate   ", "heap"}) {
     contains(key);
   }
 }
@@ -82,6 +82,7 @@ void test_raw_prints_all_fields() {
   contains("temperature_c=");
   contains("humidity_pct=");
   contains("lux=");
+  contains("(temp/humidity: ");
 }
 
 void test_portal_and_reboot_use_hooks() {
@@ -137,6 +138,7 @@ void setup() {
   Serial.begin(SerialCli::kBaud);
   delay(2000);
   bus.begin();
+  climate.begin();
   soil.begin();
   UNITY_BEGIN();
   RUN_TEST(test_help_and_unknown);

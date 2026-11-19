@@ -96,7 +96,7 @@ const char* soilVerdictAdvice(SoilVerdict v);
 #include <functional>
 
 #include "sensors/bh1750_sensor.h"
-#include "sensors/sht31_sensor.h"
+#include "sensors/climate_sensor.h"
 #include "sensors/soil_sensor.h"
 
 namespace olvar {
@@ -121,7 +121,7 @@ class SerialCli {
   static constexpr uint32_t kBaud = 115200;
   static constexpr int kMaxBytesPerPoll = 128;
 
-  SerialCli(Stream& io, Sht31Sensor& sht, Bh1750Sensor& bh, SoilSensor& soil, CliHooks hooks);
+  SerialCli(Stream& io, ClimateSensor& climate, Bh1750Sensor& bh, SoilSensor& soil, CliHooks hooks);
 
   // Expects the port to be open already: Serial.begin(SerialCli::kBaud).
   void begin();
@@ -141,7 +141,7 @@ class SerialCli {
   void reboot();
 
   Stream& io_;
-  Sht31Sensor& sht_;
+  ClimateSensor& climate_;
   Bh1750Sensor& bh_;
   SoilSensor& soil_;
   CliHooks hooks_;

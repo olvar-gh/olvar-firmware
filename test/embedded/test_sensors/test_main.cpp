@@ -8,13 +8,13 @@
 
 #include "sensors/bh1750_sensor.h"
 #include "sensors/i2c_bus.h"
-#include "sensors/sht31_sensor.h"
+#include "sensors/climate_sensor.h"
 #include "sensors/soil_sensor.h"
 
 using namespace olvar;
 
 static I2cBus bus;
-static Sht31Sensor sht(bus);
+static ClimateSensor climate(bus);
 static Bh1750Sensor bh(bus);
 static SoilSensor soil;
 
@@ -32,26 +32,61 @@ static void timedPhase(const char* action, uint32_t seconds) {
   }
 }
 
-void test_sht31_in_room_range() {
+// SHT31: 5..40 C and 10..95 %RH. DHT11: its own coarse 1 C / 1 %RH part, rated 0..50 C and
+// 20..90 %RH, so the check is that range.
+void test_climate_in_room_range() {
+  TEST_ASSERT_TRUE_MESSAGE(climate.kind() != ClimateSensor::Kind::None,
+                           "no SHT31 at 0x44/0x45 and no DHT11 on GPIO4");
+  bool dht = climate.kind() == ClimateSensor::Kind::Dht11;
+  if (dht) delay(Dht11Throttle::kMinIntervalMs);  // past the 2 s window of the boot probe
   uint32_t t0 = millis();
-  Sht31Result r = sht.read();
+  TempHumidity r = climate.read();
   uint32_t dt = millis() - t0;
-  Serial.printf("  SHT31 %.2f C %.2f %%RH (%lu ms)\n", r.temperature_c.v, r.humidity_pct.v, (unsigned long)dt);
+  Serial.printf("  %s %.2f C %.2f %%RH (%lu ms)\n", climate.name(), r.temperature_c.v, r.humidity_pct.v,
+                (unsigned long)dt);
   TEST_ASSERT_TRUE(r.temperature_c.ok);
   TEST_ASSERT_TRUE(r.humidity_pct.ok);
-  TEST_ASSERT_FLOAT_WITHIN(17.5f, 22.5f, r.temperature_c.v);  // 5..40 C
-  TEST_ASSERT_FLOAT_WITHIN(42.5f, 52.5f, r.humidity_pct.v);   // 10..95 %RH
+  if (dht) {
+    TEST_ASSERT_FLOAT_WITHIN(25.0f, 25.0f, r.temperature_c.v);  // 0..50 C
+    TEST_ASSERT_FLOAT_WITHIN(35.0f, 55.0f, r.humidity_pct.v);   // 20..90 %RH
+  } else {
+    TEST_ASSERT_FLOAT_WITHIN(17.5f, 22.5f, r.temperature_c.v);  // 5..40 C
+    TEST_ASSERT_FLOAT_WITHIN(42.5f, 52.5f, r.humidity_pct.v);   // 10..95 %RH
+  }
   TEST_ASSERT_LESS_THAN_UINT32(kMaxCallMs, dt);
 }
 
-void test_sht31_wrong_address_gives_not_ok() {
-  Sht31Sensor absent(bus, 0x45);
+// A second read inside 2 s must not touch the DHT11: same values, no 20 ms start pulse.
+void test_dht11_second_read_within_2s_is_cached() {
+  if (climate.kind() != ClimateSensor::Kind::Dht11) TEST_IGNORE_MESSAGE("SHT31 in use");
+  TempHumidity a = climate.read();
   uint32_t t0 = millis();
-  Sht31Result r = absent.read();
+  TempHumidity b = climate.read();
+  TEST_ASSERT_LESS_THAN_UINT32(5, millis() - t0);
+  TEST_ASSERT_EQUAL(a.temperature_c.ok, b.temperature_c.ok);
+  TEST_ASSERT_EQUAL_FLOAT(a.temperature_c.v, b.temperature_c.v);
+  TEST_ASSERT_EQUAL_FLOAT(a.humidity_pct.v, b.humidity_pct.v);
+}
+
+void test_sht31_wrong_address_gives_not_ok() {
+  Sht31Sensor absent(bus, 0x46);  // nothing on the Olvar bus uses 0x46
+  uint32_t t0 = millis();
+  TempHumidity r = absent.read();
   TEST_ASSERT_LESS_THAN_UINT32(kMaxCallMs, millis() - t0);
   TEST_ASSERT_FALSE(r.temperature_c.ok);
   TEST_ASSERT_FALSE(r.humidity_pct.ok);
   bus.reportResult(true);  // don't let this test's failures trigger a recovery later
+}
+
+// GPIO27 is free on the Olvar board: no sensor answers there, so the read times out quickly.
+void test_dht11_absent_gives_not_ok_quickly() {
+  Dht11Sensor absent(27);
+  absent.begin();
+  uint32_t t0 = millis();
+  TempHumidity r = absent.read();
+  TEST_ASSERT_LESS_THAN_UINT32(kMaxCallMs, millis() - t0);
+  TEST_ASSERT_FALSE(r.temperature_c.ok);
+  TEST_ASSERT_FALSE(r.humidity_pct.ok);
 }
 
 void test_bh1750_room_light() {
@@ -116,11 +151,13 @@ void setup() {
   delay(2000);
   UNITY_BEGIN();
   TEST_ASSERT_TRUE(bus.begin());
-  sht.begin();
+  climate.begin();
   bh.begin();
   soil.begin();
-  RUN_TEST(test_sht31_in_room_range);
+  RUN_TEST(test_climate_in_room_range);
+  RUN_TEST(test_dht11_second_read_within_2s_is_cached);
   RUN_TEST(test_sht31_wrong_address_gives_not_ok);
+  RUN_TEST(test_dht11_absent_gives_not_ok_quickly);
   RUN_TEST(test_bh1750_room_light);
   RUN_TEST(test_bh1750_first_read_without_begin_under_budget);
   RUN_TEST(test_bh1750_wrong_address_gives_not_ok);

@@ -53,8 +53,8 @@ inline const char* mqttStateName(MqttSession::State s) {
 #include "net/provisioning.h"
 #include "net/wifi_link.h"
 #include "sensors/bh1750_sensor.h"
+#include "sensors/climate_sensor.h"
 #include "sensors/i2c_bus.h"
-#include "sensors/sht31_sensor.h"
 #include "sensors/soil_sensor.h"
 #include "serial_cli.h"
 #include "settings.h"
@@ -76,7 +76,7 @@ class App {
   [[noreturn]] void restart();
 
   I2cBus bus_;
-  Sht31Sensor sht_;
+  ClimateSensor climate_;
   Bh1750Sensor bh_;
   SoilSensor soil_;
   NvsKvStore kv_;
@@ -87,6 +87,9 @@ class App {
   StatusLed led_;
   SerialCli console_;
   TelemetrySchedule schedule_;
+  // A due message waits here until sendAtMs_ while a DHT11 converts a fresh sample (~2 s).
+  bool sendPending_ = false;
+  uint32_t sendAtMs_ = 0;
   Settings settings_;
   char bootId_[9] = {};
 };

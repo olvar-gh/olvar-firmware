@@ -12,7 +12,7 @@ Research date: 2026-11-16. Every non-obvious claim links to its source.
 - **Toolchain:** PlatformIO Core 6.x with the **official `platformio/espressif32` platform pinned to `8.0.0`**. That release (2026-10-19) ships **Arduino-ESP32 core 3.3.12 on ESP-IDF 5.5.5**, so the community `pioarduino` fork is no longer needed. Board `esp32dev`, framework `arduino`, partition table `huge_app.csv` (firmware updates are over USB only, so there's no OTA slot).
 - **Hardware (confirmed):** a 38-pin ESP32-WROOM-32D dev board on an expansion board with a 3.3 V/5 V jumper, plus a breadboard. Normal 2.4 GHz home Wi-Fi with no login page.
 - **Libraries:** `RobTillaart/SHT31` (temperature/humidity), `claws/BH1750` (light), `bertmelis/espMqttClient` (MQTT 3.1.1, last will), `bblanchon/ArduinoJson` 7 (payload), `tzapu/WiFiManager` (first-time Wi-Fi + MQTT settings portal). `Preferences` (NVS) comes with the core.
-- **Pins:** I2C bus on **GPIO21 (SDA) / GPIO22 (SCL)**, shared by SHT31 @ 0x44 and BH1750 @ 0x23, all at 3.3 V. Capacitive soil sensor on **GPIO34 (ADC1_CH6)**, because ADC2 can't be used while Wi-Fi is on. Add a **100 nF ceramic capacitor** from GPIO34 to GND.
+- **Pins:** I2C bus on **GPIO21 (SDA) / GPIO22 (SCL)**, shared by SHT31 @ 0x44 (0x45 also accepted) and BH1750 @ 0x23, all at 3.3 V. **DHT11 fallback on GPIO4** (single-wire, 10 kΩ pull-up to 3V3), used only when no SHT31 answers at boot. Capacitive soil sensor on **GPIO34 (ADC1_CH6)**, because ADC2 can't be used while Wi-Fi is on. A **100 nF ceramic capacitor** from GPIO34 to GND is recommended (the 64-sample filter copes without it).
 - **Soil sensor:** the user's sensor is the generic 98×23 mm "Capacitive Soil Moisture Sensor" (AliExpress 1005005202930632). The seller's manual says 3.3–5.5 V supply, built-in regulator, 0–3.0 V output; it doesn't name a version (§2.3). Cheap boards often ship with defects, so instead of a chip/multimeter inspection the plan uses:
   - a **safe default wiring**: VCC on **3V3**, never 5 V;
   - a **serial sanity check** (`soilcheck`, §7.3) that compares the raw reading in air and in a glass of water.
@@ -116,6 +116,7 @@ The chat Edge Function belongs to olvar-gateway and has no firmware impact.
 | Partition table | `board_build.partitions = huge_app.csv` (3 MB app, no OTA slot) | `default.csv`: 1.25 MB slots may overflow. `min_spiffs.csv`: only useful for OTA, which is out of v1 (decision F). |
 | Firmware updates | **USB only** (decision F) | ArduinoOTA / HTTP OTA: out of v1 scope. |
 | SHT31 driver | `robtillaart/SHT31 @ 0.5.3`: single-shot read, CRC checked, heater off | Adafruit: older, pulls in BusIO. Sensirion official: second choice. |
+| DHT11 fallback | Probe SHT31 0x44, then 0x45; if neither ACKs, one DHT11 read on GPIO4; keep the first that answers until reboot (none: retry on every read). Own ~60-line driver: 20 ms start pulse via `delay()`, ≤ 5 ms bit timing in a core-1 critical section, checksum checked, ≥ 2 s after power-up and from the end of one transaction to the next start (a call inside the window returns that attempt's result, so a failure stays `null`). The DHT11 replies with the sample taken after the previous read, so a due telemetry message first triggers a conversion and is sent ~2 s later with the fresh value; the loop keeps running meanwhile. Added because the SHT31 burnt out during bring-up and a bare ASAIR DHT11 was the spare. GPIO4: not a strapping pin, not flash, free on the 38-pin board. | Adafruit DHT library: pulls in Adafruit Unified Sensor for two numbers. RMT-based reader: more code for a read once a minute. Runtime switching between sensors: not needed. |
 | BH1750 driver | `claws/BH1750 @ 1.3.0`, `ONE_TIME_HIGH_RES_MODE` | `hp_BH1750`: fine, less common. Continuous mode: no benefit at 60 s. |
 | MQTT client | `bertmelis/espMqttClient @ 1.7.3`, sync client over `WiFiClient` | **PubSubClient**: unmaintained. **arduino-mqtt**: blocking `loop()`, small buffers. **ESP32MQTTClient**: hides reconnect logic. |
 | JSON | `bblanchon/ArduinoJson @ 7.4.3` | Hand-written `snprintf`: error-prone with `null`. |
@@ -310,7 +311,7 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 - `pio test -e native` passes the smoke test.
 - CI runs both.
 - `secrets.ini` is gitignored and the build passes without it.
-- `pins.h` defines SDA=21, SCL=22, SOIL=34, LED=2, BOOT=0, SHT31_ADDR=0x44, BH1750_ADDR=0x23, `OLVAR_INTERVAL_S`=60.
+- `pins.h` defines SDA=21, SCL=22, SOIL=34, LED=2, BOOT=0, DHT11=4, SHT31_ADDR=0x44 (alt 0x45), BH1750_ADDR=0x23, `OLVAR_INTERVAL_S`=60.
 
 **Verify:** run both commands locally and on CI. No hardware needed.
 
@@ -370,14 +371,15 @@ No hardware. Post the fixture and simulator paths in notes for the gateway worke
 - `I2cBus` runs Wire at 100 kHz on GPIO21/22 and provides `scan()`.
 - Bus recovery: after 3 consecutive failures it toggles SCL 9× and runs `Wire.end()/begin()`.
 - `Sht31Sensor::read()` does a single-shot, high-repeatability, CRC-checked read; a failure gives `ok=false`.
+- `ClimateSensor` uses an SHT31 at 0x44/0x45 if one answers at boot, else a DHT11 on GPIO4 (checksum checked, ≤ 1 read per 2 s, failure gives `ok=false`); with neither it keeps probing and returns `ok=false`.
 - `Bh1750Sensor::read()` uses one-time high-res mode; a negative result gives `ok=false`.
 - `SoilSensor::sampleRaw()` sets 11 dB attenuation on GPIO34, takes 64 samples ~1 ms apart, then `trimmedMean(…,16)`.
 - No call blocks longer than 200 ms.
 - `WIRING.md` contains §7.3–§7.4.
 
 **Verify on hardware:** `pio test -e esp32dev -f embedded/*`.
-- The scan finds 0x44 and 0x23.
-- Temperature is 5–40 °C, RH 10–95 %.
+- The scan finds 0x23, and 0x44 or 0x45 when an SHT31 is fitted.
+- SHT31: temperature 5–40 °C, RH 10–95 %. DHT11: 0–50 °C, 20–90 %RH.
 - Lux is >0 under room light and ≤5 when covered.
 - `soil_raw` differs by >500 counts between air and a glass of water.
 
@@ -432,7 +434,7 @@ No hardware. Post the fixture and simulator paths in notes for the gateway worke
 **Acceptance:**
 - The CLI reads lines at 115200. `portal` sets the flag and reboots. `reboot`, `help`.
 - `status` prints IP, RSSI, MQTT state, device_id, boot_id, seq, skipped and free heap.
-- `raw` prints one fresh `soil_raw` plus the SHT31/BH1750 values, for wiring checks.
+- `raw` prints one fresh `soil_raw` plus the SHT31-or-DHT11/BH1750 values and names the temperature/humidity sensor in use; `status` names it too.
 - `soilcheck` runs the guided §7.3 check without blocking telemetry:
   - Prompts "hold the sensor in AIR, press Enter", then streams `soil_raw` every 1 s for 20 s.
   - Prompts "put it in WATER up to the line, press Enter", then streams for 30 s.
@@ -487,7 +489,7 @@ No hardware. Post the fixture and simulator paths in notes for the gateway worke
 **Safe default wiring (always use this):**
 - Red **VCC → 3V3**: the board's 3V3 pin, or any expansion-board V pin with the jumper on 3.3 V. **Never 5V or VIN.** If your board happens to lack the regulator, 5 V could push AOUT above 3.3 V and damage GPIO34. At 3.3 V that can't happen, and a board with a regulator works fine on 3.3 V.
 - Black **GND → GND**.
-- Yellow **AOUT → GPIO34**, plus a 100 nF capacitor from GPIO34 to GND (§7.4).
+- Yellow **AOUT → GPIO34**, plus (recommended) a 100 nF capacitor from GPIO34 to GND (§7.4).
 - Don't put it in the pot yet. Before the check, wipe the blade dry.
 
 **Software check** (after flashing; takes ~2 minutes):
@@ -530,10 +532,12 @@ After a passing check, protect the sensor: coat the cut PCB edges along the blad
 | 11 | Soil sensor **VCC** (red) | **3V3** | |
 | 12 | Soil sensor **GND** (black) | **GND** | |
 | 13 | Soil sensor **AOUT** (yellow) | **GPIO34** | ADC1_CH6, input-only; **not** an ADC2 pin |
-| 14 | 100 nF ceramic capacitor ("104") | between **GPIO34** and **GND**, close to the ESP32 | ADC noise |
+| 14 | 100 nF ceramic capacitor ("104"), recommended | between **GPIO34** and **GND**, close to the ESP32 | ADC noise; optional thanks to the 64-sample filter |
 | 15 | USB cable | ESP32 board's USB port → 5 V ≥1 A charger (or your Mac while flashing) | |
 
 **Pins not to use for sensors:** GPIO0/2/5/12/15 (boot strapping), GPIO6–11 and 16–17 (flash), and all ADC2 pins for analog.
+
+**No SHT31?** A bare 4-pin DHT11 works instead: pin 1 VDD → 3V3, pin 2 DATA → GPIO4, pin 3 NC, pin 4 GND (grille facing you, pins down, left to right), 10 kΩ between DATA and 3V3. A 2×3-header SHT31 board must not go into one side of a breadboard (pins in the same row short). Details in `docs/WIRING.md`.
 
 **Placement:** put the SHT31 on 15–20 cm wires **away from the ESP32 and the charger**, out of direct sun. Point the GY-302 window up at plant level, uncovered. Keep I2C wires ≤30 cm.
 
@@ -569,6 +573,7 @@ The final decisions answer the earlier questions (board, Wi-Fi, OTA, soil scale,
 | Dry-air reading sits near the ADC's non-linear top (>2.45 V at 11 dB) | Medium | The server-side two-point calibration absorbs it. Readings only clip at 4095 (~3.1 V). |
 | Calibrating at a 60 s interval is slow: one reading per minute | Medium | §7.6 says to wait ≥2 readings. The dashboard should show the age of the latest `soil_raw`. |
 | Temperature reads high because the ESP32 or charger warms the SHT31 | Medium | Place it 15–20 cm away. |
+| DHT11 used instead of the SHT31: whole-degree / whole-percent steps, ±2 °C / ±5 %RH, rated 20–90 %RH | Medium | Same telemetry fields; charts look steppy. Swap back to an SHT31 when one is available (it wins automatically at boot). |
 | I2C errors from breadboard jumper wires | Medium | 100 kHz, short wires, bus recovery, `null` fields |
 | QoS 1 resend after reconnect would arrive late and get a stale gateway timestamp | Low | Discard unacked telemetry on disconnect (T6). The gateway also dedupes on `(device_id, boot_id, seq)`. |
 | QoS 1 retransmit while connected (PUBACK later than 10 s) delivers a duplicate | Low | Expected at-least-once behaviour. The gateway stores the first copy (dedup key). Acceptance checks count unique keys. |

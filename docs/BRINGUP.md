@@ -8,8 +8,9 @@ Related docs: [WIRING.md](WIRING.md) (wiring and the soil sensor check),
 
 ## 0. What you need
 
-- [ ] The ESP32 board on its expansion board, the SHT31, the GY-302 (BH1750), the soil sensor,
-      a 100 nF capacitor, jumper wires and the breadboard.
+- [ ] The ESP32 board on its expansion board, the SHT31 (or a DHT11 plus a 10 kΩ resistor, see
+      [WIRING.md](WIRING.md#dht11-instead-of-the-sht31)), the GY-302 (BH1750), the soil sensor,
+      jumper wires and the breadboard. A 100 nF capacitor is recommended.
 - [ ] A **data** USB cable (some cables only charge; if no port shows up in step 2, try another).
 - [ ] Your Mac with PlatformIO Core installed (`brew install platformio`) and the command line
       tools (`xcode-select --install`).
@@ -24,9 +25,12 @@ Do the wiring exactly as in [WIRING.md](WIRING.md), then check:
 - [ ] The expansion board's V-rail jumper is on **3.3 V**.
 - [ ] Every sensor's VCC/VIN goes to **3V3**. Nothing goes to 5V or VIN.
 - [ ] Every GND goes to GND.
-- [ ] SHT31 SDA and GY-302 SDA both go to **GPIO21**; both SCL go to **GPIO22**.
+- [ ] SHT31 SDA and GY-302 SDA both go to **GPIO21**; both SCL go to **GPIO22**. A 2×3-pin
+      SHT31 board sits across the breadboard's centre gap (or on jumper wires), never in one side.
+- [ ] Or, with a DHT11 instead of the SHT31: pin 1 → 3V3, pin 2 → **GPIO4**, pin 4 → GND, pin 3
+      free, and a 10 kΩ resistor between pin 2 and 3V3.
 - [ ] Soil sensor: red → 3V3, black → GND, yellow → **GPIO34**.
-- [ ] The 100 nF capacitor sits between GPIO34 and GND.
+- [ ] If fitted (recommended), the 100 nF capacitor sits between GPIO34 and GND.
 - [ ] No bare wire ends touch each other.
 
 If anything is unsure, stop and fix it now: a wrong power wire is the only mistake here that can
@@ -100,6 +104,7 @@ After the restart the monitor shows something like:
 olvar-firmware 0.1.0+a1b2c3d
 device_id olvar-a1b2c3
 boot_id 9f3c07ab
+[sensors] temperature/humidity: SHT31 at 0x44
 [mqtt] broker 192.168.1.20:1883, user olvar-a1b2c3
 Type 'help' for commands.
 [wifi] connected, ip 192.168.1.57, rssi -61 dBm
@@ -107,7 +112,9 @@ Type 'help' for commands.
 [telemetry] sent seq 0, heap 187312
 ```
 
-- [ ] No `[sensors] … not found` lines. If you see one, recheck that sensor's four wires (step 1).
+- [ ] `[sensors] temperature/humidity:` names your sensor (`SHT31 at 0x44`, or `DHT11 on GPIO4`).
+      `[sensors] no SHT31 … or DHT11 … found` or `[sensors] BH1750 not found` means that sensor's
+      wires need a recheck (step 1).
 - [ ] `[wifi] connected` appears within ~10 s.
 - [ ] `[mqtt] connected` follows, and the first `[telemetry] sent seq 0` comes ≤ 5 s later. After
       that, one `[telemetry] sent` line every 60 s with `seq` counting up.
@@ -124,9 +131,12 @@ The blue LED on the board shows the state:
 
 Type these commands in the monitor and press Enter:
 
-- [ ] `status`: `wifi connected`, `mqtt connected`, `seq` growing, `skipped 0`.
-- [ ] `raw`: one line like `soil_raw=3120 temperature_c=23.41 humidity_pct=51.07 lux=312.5`.
-  - Temperature 5–40 °C and humidity 10–95 %: the SHT31 works.
+- [ ] `status`: `wifi connected`, `mqtt connected`, `seq` growing, `skipped 0`, and `climate`
+      shows which temperature/humidity sensor is in use.
+- [ ] `raw`: one line like
+      `soil_raw=3120 temperature_c=23.41 humidity_pct=51.07 lux=312.5 (temp/humidity: SHT31 at 0x44)`.
+  - SHT31: temperature 5–40 °C and humidity 10–95 %. DHT11: 0–50 °C and 20–90 %, usually in
+    whole numbers (`23.00`). Within 2 s of the last DHT11 read, `raw` repeats that read.
   - Lux above 0 in room light and ≤ 5 when you cover the GY-302 with your finger: the BH1750 works.
   - `null` for a value means that sensor did not answer: recheck its wires.
 - [ ] `soilcheck`: follow the prompts (sensor in the air, then in a glass of water up to the white
@@ -159,10 +169,12 @@ Once this works, place the soil sensor in the pot and calibrate it in the dashbo
 
 These confirm the firmware on real hardware. Run them once before calling the release done.
 
-**One sensor unplugged.** While telemetry is flowing, pull the SHT31's VIN wire.
+**One sensor unplugged.** While telemetry is flowing, pull the SHT31's VIN wire. With a DHT11,
+pull the wire from its pin 2 (DATA) row to **GPIO4** instead and leave it powered: without power,
+the pull-up on DATA would feed the sensor through its data pin.
 - [ ] The next messages have `"temperature_c":null,"humidity_pct":null`; `lux` and `soil_raw` are
       still numbers.
-- [ ] Plug VIN back in: within a minute or two the values return, without a reboot (`boot_id`
+- [ ] Plug the wire back in: within a minute or two the values return, without a reboot (`boot_id`
       unchanged).
 
 **Broker outage.** On the Pi: `sudo systemctl stop mosquitto`, wait 2 minutes, then

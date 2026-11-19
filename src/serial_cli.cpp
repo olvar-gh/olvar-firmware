@@ -159,9 +159,9 @@ void printOptF(Stream& io, const char* key, OptF v, int decimals) {
 
 }  // namespace
 
-SerialCli::SerialCli(Stream& io, Sht31Sensor& sht, Bh1750Sensor& bh, SoilSensor& soil,
+SerialCli::SerialCli(Stream& io, ClimateSensor& climate, Bh1750Sensor& bh, SoilSensor& soil,
                      CliHooks hooks)
-    : io_(io), sht_(sht), bh_(bh), soil_(soil), hooks_(hooks) {}
+    : io_(io), climate_(climate), bh_(bh), soil_(soil), hooks_(hooks) {}
 
 void SerialCli::begin() { io_.println("Type 'help' for commands."); }
 
@@ -205,8 +205,8 @@ void SerialCli::handleLine(const char* line) {
 
 void SerialCli::printHelp() {
   io_.println("Commands:");
-  io_.println("  status     network, MQTT, ids, seq, skipped, free heap");
-  io_.println("  raw        one fresh soil_raw + SHT31 + BH1750 reading (wiring check)");
+  io_.println("  status     network, MQTT, ids, seq, skipped, temp/humidity sensor, free heap");
+  io_.println("  raw        one fresh soil_raw + SHT31/DHT11 + BH1750 reading (wiring check)");
   io_.println("  soilcheck  guided air/water soil sensor check (~2 min, nothing is saved)");
   io_.println("  portal     reopen the Wi-Fi/MQTT setup portal (reboots)");
   io_.println("  reboot     restart the board");
@@ -229,6 +229,7 @@ void SerialCli::printStatus() {
   io_.printf("mqtt      %s\n", s.mqtt_state);
   io_.printf("seq       %lu\n", static_cast<unsigned long>(s.seq));
   io_.printf("skipped   %lu\n", static_cast<unsigned long>(s.skipped));
+  io_.printf("climate   %s\n", climate_.name());
   io_.printf("heap      %lu free, %lu min\n", static_cast<unsigned long>(ESP.getFreeHeap()),
              static_cast<unsigned long>(ESP.getMinFreeHeap()));
   io_.printf("uptime    %lu ms\n", static_cast<unsigned long>(millis()));
@@ -236,14 +237,14 @@ void SerialCli::printStatus() {
 
 void SerialCli::printRaw() {
   OptI soil = soil_.sampleRaw();
-  Sht31Result sht = sht_.read();
+  TempHumidity th = climate_.read();
   OptF lux = bh_.read();
   if (soil.ok) io_.printf("soil_raw=%ld", static_cast<long>(soil.v));
   else io_.print("soil_raw=null");
-  printOptF(io_, "temperature_c", sht.temperature_c, 2);
-  printOptF(io_, "humidity_pct", sht.humidity_pct, 2);
+  printOptF(io_, "temperature_c", th.temperature_c, 2);
+  printOptF(io_, "humidity_pct", th.humidity_pct, 2);
   printOptF(io_, "lux", lux, 1);
-  io_.println();
+  io_.printf(" (temp/humidity: %s)\n", climate_.name());
 }
 
 void SerialCli::startSoilCheck() {

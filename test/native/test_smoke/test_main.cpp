@@ -24,7 +24,9 @@ static void test_pins_match_plan() {
   TEST_ASSERT_EQUAL(34, olvar::pins::kSoil);
   TEST_ASSERT_EQUAL(2, olvar::pins::kLed);
   TEST_ASSERT_EQUAL(0, olvar::pins::kBoot);
+  TEST_ASSERT_EQUAL(4, olvar::pins::kDht11);
   TEST_ASSERT_EQUAL_HEX8(0x44, olvar::pins::kSht31Addr);
+  TEST_ASSERT_EQUAL_HEX8(0x45, olvar::pins::kSht31AltAddr);
   TEST_ASSERT_EQUAL_HEX8(0x23, olvar::pins::kBh1750Addr);
   TEST_ASSERT_EQUAL(60, OLVAR_INTERVAL_S);
 }
