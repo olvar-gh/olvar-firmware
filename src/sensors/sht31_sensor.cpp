@@ -4,15 +4,15 @@
 
 namespace olvar {
 
-Sht31Sensor::Sht31Sensor(I2cBus& bus, uint8_t addr) : bus_(bus), sht_(addr, &bus.wire()) {}
+Sht31Sensor::Sht31Sensor(I2cBus& bus, uint8_t addr) : bus_(bus), addr_(addr), sht_(addr, &bus.wire()) {}
 
 bool Sht31Sensor::begin() {
   started_ = sht_.begin() && sht_.heatOff();
   return started_;
 }
 
-Sht31Result Sht31Sensor::read() {
-  Sht31Result r;
+TempHumidity Sht31Sensor::read() {
+  TempHumidity r;
   if (!started_ && !begin()) {
     bus_.reportResult(false);
     return r;

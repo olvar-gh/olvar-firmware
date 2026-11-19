@@ -8,21 +8,20 @@
 
 namespace olvar {
 
-struct Sht31Result {
-  OptF temperature_c, humidity_pct;
-};
-
 class Sht31Sensor {
  public:
   explicit Sht31Sensor(I2cBus& bus, uint8_t addr = pins::kSht31Addr);
 
+  uint8_t address() const { return addr_; }
+
   // Safe to call when the sensor is absent; read() retries it.
   bool begin();
   // ~15 ms on success. Any I2C or CRC failure gives ok=false for both values.
-  Sht31Result read();
+  TempHumidity read();
 
  private:
   I2cBus& bus_;
+  uint8_t addr_;
   SHT31 sht_;
   bool started_ = false;
 };

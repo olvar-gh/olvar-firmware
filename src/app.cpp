@@ -15,11 +15,11 @@ constexpr uint32_t kIntervalMs = OLVAR_INTERVAL_S * 1000UL;
 }  // namespace
 
 App::App()
-    : sht_(bus_),
+    : climate_(bus_),
       bh_(bus_),
       store_(kv_),
       led_(pins::kLed),
-      console_(Serial, sht_, bh_, soil_,
+      console_(Serial, climate_, bh_, soil_,
                CliHooks{[this](CliStatus& s) { fillStatus(s); },
                         [this] { store_.setPortalRequested(true); }, [this] { restart(); }}),
       schedule_(kIntervalMs, 0) {}
@@ -44,7 +44,12 @@ void App::setup() {
   }
 
   bus_.begin();
-  if (!sht_.begin()) Serial.println("[sensors] SHT31 not found at 0x44; temperature/humidity will be null");
+  if (climate_.begin()) {
+    Serial.printf("[sensors] temperature/humidity: %s\n", climate_.name());
+  } else {
+    Serial.println("[sensors] no SHT31 (0x44/0x45) or DHT11 (GPIO4) found; temperature/humidity "
+                   "will be null until one answers");
+  }
   if (!bh_.begin()) Serial.println("[sensors] BH1750 not found at 0x23; lux will be null");
   soil_.begin();
   button_.begin();
@@ -80,10 +85,10 @@ void App::loop() {
 }
 
 Reading App::readSensors() {
-  const Sht31Result sht = sht_.read();
+  const TempHumidity th = climate_.read();
   Reading r;
-  r.temperature_c = sht.temperature_c;
-  r.humidity_pct = sht.humidity_pct;
+  r.temperature_c = th.temperature_c;
+  r.humidity_pct = th.humidity_pct;
   r.lux = bh_.read();
   r.soil_raw = soil_.sampleRaw();
   return r;

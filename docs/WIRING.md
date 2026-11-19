@@ -9,10 +9,10 @@ cable unplugged while you move wires**. Source: docs/PLAN.md §7.3–§7.4.
 |---|---|
 | 38-pin ESP32-WROOM-32D dev board on its expansion board | the expansion board has a **3.3 V / 5 V jumper** |
 | Breadboard + male-to-male / male-to-female jumper wires | keep I2C wires ≤ 30 cm |
-| SHT31 breakout (temperature + humidity) | pins VIN, GND, SCL, SDA, (ADR) |
+| SHT31 breakout (temperature + humidity) | pins VIN, GND, SCL, SDA, (ADR). **Or** a DHT11 instead, see [below](#dht11-instead-of-the-sht31) |
 | GY-302 breakout (BH1750 light sensor) | pins VCC, GND, SCL, SDA, ADDR |
 | Capacitive soil moisture sensor + its 3-wire cable | red = VCC, black = GND, yellow = AOUT |
-| One 100 nF ceramic capacitor | small, often marked **"104"**; it has no polarity |
+| One 100 nF ceramic capacitor (recommended) | small, often marked **"104"**; it has no polarity. Optional, but it steadies the soil reading |
 | A data USB cable and a 5 V ≥ 1 A phone charger | a charge-only cable won't show a serial port |
 
 ## The three rules
@@ -58,8 +58,14 @@ SDA into the SDA row and both SCL into the SCL row. It's also handy to make a 3V
 | 11 | Soil sensor **VCC** (red) | **3V3** | |
 | 12 | Soil sensor **GND** (black) | **GND** | |
 | 13 | Soil sensor **AOUT** (yellow) | **GPIO34** | ADC1_CH6, input-only; **not** an ADC2 pin |
-| 14 | 100 nF ceramic capacitor ("104") | between **GPIO34** and **GND**, close to the ESP32 | ADC noise |
+| 14 | 100 nF ceramic capacitor ("104"), **recommended** | between **GPIO34** and **GND**, close to the ESP32 | less ADC noise; the firmware also averages 64 samples, so it works without one |
 | 15 | USB cable | ESP32 board's USB port → 5 V ≥1 A charger (or your Mac while flashing) | |
+
+**SHT31 boards with a 2×3 header:** some SHT31 breakouts have their six pins in two rows of
+three. **Don't push such a header into one side of a breadboard**: every five-hole breadboard row
+is one connection, so the two pins that land in the same row are shorted together (for example
+VIN to GND). Either plug it across the centre gap so each pin gets its own row, or connect it with
+female-to-male jumper wires.
 
 **Pins not to use for sensors:** GPIO0/2/5/12/15 (boot strapping), GPIO6–11 and 16–17 (flash),
 and all ADC2 pins for analog (ADC2 stops working while Wi-Fi is on).
@@ -75,7 +81,47 @@ window up at plant level, uncovered. Keep I2C wires ≤ 30 cm.
 - [ ] Yellow (not red) goes to **GPIO34**.
 - [ ] SDA → GPIO21 and SCL → GPIO22 (swapping them is the most common mistake; nothing breaks,
       the sensors just aren't found).
-- [ ] The capacitor's two legs are in the GPIO34 row and a GND row.
+- [ ] If you fitted the capacitor: its two legs are in the GPIO34 row and a GND row.
+- [ ] Only one temperature/humidity sensor: the SHT31 **or** the DHT11 (if both answer, the SHT31
+      is used and the DHT11 is ignored).
+
+## DHT11 instead of the SHT31
+
+If you have no working SHT31, a **DHT11** can measure temperature and humidity instead. The
+firmware looks for an SHT31 at boot (address 0x44, then 0x45). If neither answers it uses the
+DHT11 on **GPIO4**. The telemetry is the same; the DHT11 is just coarser (whole degrees and whole
+percent, ±2 °C, ±5 %RH) and rated for 0–50 °C and 20–90 %RH.
+
+**Your part:** the bare 4-pin ASAIR DHT11 (blue grille, no small board around it), 3.3–5.5 V.
+Hold it with the **grille facing you and the pins pointing down**. Counted **left to right**:
+
+```
+      ┌───────────────────┐
+      │ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒ │   grille facing you
+      │ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒ │
+      └──┬────┬────┬────┬─┘
+         │    │    │    │     pins down
+         1    2    3    4
+        VDD  DATA  NC  GND
+```
+
+| Wire | DHT11 pin | To | Notes |
+|---|---|---|---|
+| D1 | **1 VDD** | **3V3** | never 5 V: at 5 V, DATA would swing to 5 V on a 3.3 V pin |
+| D2 | **2 DATA** | **GPIO4** | |
+| D3 | 10 kΩ resistor (brown-black-orange) | between **DATA** (pin 2) and **3V3** | the pull-up; the bare part has none built in |
+| D4 | **3 NC** | nothing | not connected inside |
+| D5 | **4 GND** | **GND** | |
+
+On the breadboard: put the four legs in four different rows, run wires from the pin 1 row to the
+3V3 row, from the pin 4 row to the GND row and from the pin 2 row to GPIO4, and plug the 10 kΩ
+resistor's legs into the pin 2 row and the 3V3 row. Leave the SHT31 out. Placement is the same as
+for the SHT31: 15–20 cm away from the ESP32 and the charger.
+
+GPIO4 is not a boot-strapping pin, so the pull-up doesn't change how the board starts. The
+firmware reads the DHT11 at most once every 2 s (its limit); a read with a bad checksum or no
+answer is sent as `null`, never as an old value. `status` and `raw` in the serial monitor show
+which sensor is in use (`DHT11 on GPIO4` or `SHT31 at 0x44`).
 
 ## Soil sensor: safe wiring and software check
 
@@ -89,7 +135,7 @@ pin names are also printed on the board next to the white connector.
   **Never 5V or VIN.** If your board happens to lack the regulator, 5 V could push AOUT above
   3.3 V and damage GPIO34. At 3.3 V that can't happen, and a board with a regulator works fine on 3.3 V.
 - Black **GND → GND**.
-- Yellow **AOUT → GPIO34**, plus a 100 nF capacitor from GPIO34 to GND (wire 14 above).
+- Yellow **AOUT → GPIO34**, plus (recommended) a 100 nF capacitor from GPIO34 to GND (wire 14 above).
 - Don't put it in the pot yet. Before the check, wipe the blade dry.
 
 **Software check** (after flashing; takes ~2 minutes):
@@ -108,7 +154,7 @@ dashboard calibration uses your own values.
 |---|---|---|
 | **Saturated** | air min ≥ 4000 | The pin sees ≥ ~3.1 V. **Unplug the red wire now.** Make sure it's on **3V3**, not 5V/VIN, and that yellow (not red) goes to GPIO34. Then re-run. |
 | **NoSignal** | air max < 300 | Nothing reaches GPIO34, or the sensor has no power. Re-seat all three wires and check that yellow is on **GPIO34** (not 35/32) and red/black aren't swapped. Re-run. |
-| **Noisy** | max − min > 300 within the air phase | The value jumps around: a loose wire or a floating pin (an unconnected ADC pin reads random values). Push the yellow wire in firmly, check the 100 nF capacitor sits between GPIO34 and GND, use shorter wires, re-run. |
+| **Noisy** | max − min > 300 within the air phase | The value jumps around: a loose wire or a floating pin (an unconnected ADC pin reads random values). Push the yellow wire in firmly, add the 100 nF capacitor between GPIO34 and GND if it isn't fitted (or check it sits right), use shorter wires, re-run. |
 | **Swapped** | water value > air value + 150 | The steps were probably done in the wrong order. Re-run: air first, then water. |
 | **Stuck** | span < 150 | The sensor doesn't react to water. Its oscillator isn't running, which is typical of boards with a 5 V-only timer chip, or it's a dead board. **Replace the sensor**; they're about $1–2. When reordering, choose a listing whose photos show "TLC555" on the chip, or a branded one (DFRobot SEN0193). |
 | **Slow** | water value not settled (within ±30) after 15 s, or still drifting at 30 s | The reading follows water very slowly: the known "floating 1 MΩ resistor" defect. Fix without soldering: plug a **1 MΩ resistor** (colour bands brown-black-green) into the breadboard **between the yellow AOUT row and a GND row**. Re-run; it should now settle in a few seconds. If it's still slow, replace the sensor. |
@@ -130,8 +176,8 @@ pio test -e esp32dev -f embedded/test_sensors -v
 
 | Test | Passes when | If it fails |
 |---|---|---|
-| I2C scan | devices at **0x44** (SHT31) and **0x23** (GY-302) | check SDA/SCL aren't swapped, 3V3 + GND reach both boards, ADR/ADDR not on 5 V |
-| SHT31 | 5–40 °C and 10–95 %RH | move it away from the ESP32 and charger |
+| I2C scan | a device at **0x23** (GY-302), and at **0x44** or **0x45** if an SHT31 is fitted | check SDA/SCL aren't swapped, 3V3 + GND reach both boards, ADR/ADDR not on 5 V |
+| Temperature/humidity | SHT31: 5–40 °C and 10–95 %RH. DHT11: 0–50 °C and 20–90 %RH | move it away from the ESP32 and charger. "no SHT31 … and no DHT11": recheck its wires; for the DHT11 also the 10 kΩ resistor and DATA on GPIO4 |
 | BH1750 | lux > 0 in room light; ≤ 5 when you cover the window (the test tells you when) | window covered by tape or facing the table |
 | Soil | air − water > 500 counts (the test tells you when to hold it in air, then in water) | run `soilcheck` above for a diagnosis |
 

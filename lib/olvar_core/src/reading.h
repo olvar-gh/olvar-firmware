@@ -8,6 +8,11 @@
 struct OptF { bool ok = false; float v = 0; };
 struct OptI { bool ok = false; int32_t v = 0; };
 
+// One temperature/humidity read, from whichever sensor is fitted (SHT31 or DHT11).
+struct TempHumidity {
+  OptF temperature_c, humidity_pct;
+};
+
 struct Reading {
   OptF temperature_c, humidity_pct, lux;
   OptI soil_raw;
