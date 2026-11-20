@@ -298,7 +298,7 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 //              size_t telemetryTopic(const char* id, char* out, size_t cap); size_t statusTopic(const char* id, char* out, size_t cap);
 // settings.h   struct Settings{char device_id[33]; char mqtt_host[64]; uint16_t mqtt_port=1883; char mqtt_pass[65];}; // MQTT username = device_id
 //              bool validate(const Settings&, const char** err);
-// cli.h        enum class Cmd{Status,Raw,SoilCheck,Portal,Reboot,Help,Unknown}; Cmd parseCommand(const char* line);
+// cli.h        enum class Cmd{Status,Raw,SoilCheck,DhtWatch,Portal,Reboot,Help,Unknown}; Cmd parseCommand(const char* line);
 // backoff.h    class Backoff{ public: Backoff(uint32_t minMs,uint32_t maxMs); uint32_t next(uint32_t rand01k); void reset(); };
 //              class IntervalTimer{ public: explicit IntervalTimer(uint32_t periodMs); bool due(uint32_t nowMs); };
 ```
@@ -378,7 +378,7 @@ No hardware. The gateway reuses the fixtures and the simulator.
 
 **Verify on hardware:** `pio test -e esp32dev -f embedded/*`.
 - The scan finds 0x23, and 0x44 or 0x45 when an SHT31 is fitted.
-- SHT31: temperature 5–40 °C, RH 10–95 %. DHT11: 0–50 °C, 20–90 %RH.
+- SHT31: temperature 5–40 °C, RH 10–95 %. DHT11 (ASAIR): reports −20–60 °C, 5–95 %RH; indoors expect 20–60 %RH.
 - Lux is >0 under room light and ≤5 when covered.
 - `soil_raw` differs by >500 counts between air and a glass of water.
 
@@ -572,7 +572,7 @@ The final decisions answer the earlier questions (board, Wi-Fi, OTA, soil scale,
 | Dry-air reading sits near the ADC's non-linear top (>2.45 V at 11 dB) | Medium | The server-side two-point calibration absorbs it. Readings only clip at 4095 (~3.1 V). |
 | Calibrating at a 60 s interval is slow: one reading per minute | Medium | §7.6 says to wait ≥2 readings. The dashboard should show the age of the latest `soil_raw`. |
 | Temperature reads high because the ESP32 or charger warms the SHT31 | Medium | Place it 15–20 cm away. |
-| DHT11 used instead of the SHT31: whole-degree / whole-percent steps, ±2 °C / ±5 %RH, rated 20–90 %RH | Medium | Same telemetry fields; charts look steppy. Swap back to an SHT31 when one is available (it wins automatically at boot). |
+| DHT11 used instead of the SHT31: whole-degree / whole-percent steps, ±2 °C / ±5 %RH, reports 5–95 %RH (normal range 8–85 %RH) | Medium | Same telemetry fields; charts look steppy. Swap back to an SHT31 when one is available (it wins automatically at boot). |
 | I2C errors from breadboard jumper wires | Medium | 100 kHz, short wires, bus recovery, `null` fields |
 | QoS 1 resend after reconnect would arrive late and get a stale gateway timestamp | Low | Discard unacked telemetry on disconnect (T6). The gateway also dedupes on `(device_id, boot_id, seq)`. |
 | QoS 1 retransmit while connected (PUBACK later than 10 s) delivers a duplicate | Low | Expected at-least-once behaviour. The gateway stores the first copy (dedup key). Acceptance checks count unique keys. |

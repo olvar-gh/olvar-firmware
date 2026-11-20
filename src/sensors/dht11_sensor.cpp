@@ -4,23 +4,17 @@ namespace olvar {
 
 namespace {
 
-constexpr uint32_t kPowerUpMs = 2000;      // datasheet §5.4: no start signal in the first 2 s
-constexpr uint32_t kStartLowMs = 20;       // host start signal, >= 18 ms
-constexpr uint32_t kPhaseTimeoutUs = 100;  // every sensor phase is <= 80 us
+constexpr uint32_t kPowerUpMs = 2000;  // datasheet §5.4: no start signal in the first 2 s
+constexpr uint32_t kStartLowMs = 20;   // host start signal, 18-30 ms
 
 portMUX_TYPE dhtMux = portMUX_INITIALIZER_UNLOCKED;
 
-// Waits while the pin reads `level`; false if it is still there after kPhaseTimeoutUs.
-bool waitWhile(uint8_t pin, int level, uint16_t& us) {
-  uint32_t t0 = micros();
-  uint32_t dt = 0;
-  while (digitalRead(pin) == level) {
-    dt = micros() - t0;
-    if (dt > kPhaseTimeoutUs) return false;
-  }
-  us = static_cast<uint16_t>(dt);
-  return true;
-}
+// The bus as dht11WalkReply() sees it.
+struct PinLine {
+  uint8_t pin;
+  int level() { return digitalRead(pin); }
+  uint32_t us() { return micros(); }
+};
 
 }  // namespace
 
@@ -43,25 +37,26 @@ TempHumidity Dht11Sensor::read() {
 }
 
 bool Dht11Sensor::readFrame(uint8_t bytes[5]) {
+  uint32_t t0 = micros();
   digitalWrite(pin_, LOW);
   delay(kStartLowMs);
 
-  uint16_t highUs[kDht11Bits];
-  uint16_t us = 0;
-  bool ok = true;
+  Dht11Pulses pulses;
+  PinLine line{pin_};
   portENTER_CRITICAL(&dhtMux);
   digitalWrite(pin_, HIGH);
-  // Release (20-40 us high), then the sensor's 80 us low + 80 us high response.
-  ok = waitWhile(pin_, HIGH, us) && waitWhile(pin_, LOW, us) && waitWhile(pin_, HIGH, us);
-  // Each bit: 50 us low, then high for 26-28 us (0) or ~70 us (1).
-  for (size_t i = 0; ok && i < kDht11Bits; ++i) {
-    ok = waitWhile(pin_, LOW, us) && waitWhile(pin_, HIGH, highUs[i]);
-  }
+  uint32_t startLowUs = micros() - t0;
+  dht11WalkReply(line, pulses);
   portEXIT_CRITICAL(&dhtMux);
   digitalWrite(pin_, HIGH);
 
-  if (ok) dht11PulsesToBytes(highUs, bytes);
-  return ok;
+  diag_ = dht11Diagnose(pulses);
+  diag_.read = true;
+  diag_.atMs = millis();
+  diag_.startLowUs = startLowUs;
+  if (pulses.stage != Dht11Stage::Done) return false;
+  for (size_t i = 0; i < 5; ++i) bytes[i] = diag_.bytes[i];
+  return true;
 }
 
 }  // namespace olvar

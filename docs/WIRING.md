@@ -90,7 +90,10 @@ window up at plant level, uncovered. Keep I2C wires ≤ 30 cm.
 If you have no working SHT31, a **DHT11** can measure temperature and humidity instead. The
 firmware looks for an SHT31 at boot (address 0x44, then 0x45). If neither answers it uses the
 DHT11 on **GPIO4**. The telemetry is the same; the DHT11 is just coarser (whole degrees and whole
-percent, ±2 °C, ±5 %RH) and rated for 0–50 °C and 20–90 %RH.
+percent, ±2 °C, ±5 %RH). The ASAIR datasheet (2022-12) gives a reporting range of −20–60 °C and
+5–95 %RH, accurate in 8–85 %RH; older Aosong sheets said 0–50 °C and 20–90 %RH. A DHT11 stuck
+near 5 %RH in a normal room is at the bottom of its range: see
+[BRINGUP.md §10](BRINGUP.md#10-humidity-check-dht11).
 
 **Your part:** the bare 4-pin ASAIR DHT11 (blue grille, no small board around it), 3.3–5.5 V.
 Hold it with the **grille facing you and the pins pointing down**. Counted **left to right**:
@@ -181,7 +184,7 @@ pio test -e esp32dev -f embedded/test_sensors -v
 | Test | Passes when | If it fails |
 |---|---|---|
 | I2C scan | a device at **0x23** (GY-302), and at **0x44** or **0x45** if an SHT31 is fitted | check SDA/SCL aren't swapped, 3V3 + GND reach both boards, ADR/ADDR not on 5 V |
-| Temperature/humidity | SHT31: 5–40 °C and 10–95 %RH. DHT11: 0–50 °C and 20–90 %RH | move it away from the ESP32 and charger. "no SHT31 … and no DHT11": recheck its wires; for the DHT11 also the 10 kΩ resistor and DATA on GPIO4 |
+| Temperature/humidity | SHT31: 5–40 °C and 10–95 %RH. DHT11: 0–50 °C and, indoors, 20–60 %RH (below 10 %RH: [BRINGUP.md §10](BRINGUP.md#10-humidity-check-dht11)) | move it away from the ESP32 and charger. "no SHT31 … and no DHT11": recheck its wires; for the DHT11 also the 10 kΩ resistor and DATA on GPIO4 |
 | BH1750 | lux > 0 in room light; ≤ 5 when you cover the window (the test tells you when) | window covered by tape or facing the table |
 | Soil | air − water > 500 counts (the test tells you when to hold it in air, then in water) | run `soilcheck` above for a diagnosis |
 

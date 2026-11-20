@@ -30,6 +30,9 @@ class ClimateSensor {
   TempHumidity read();
 
   Kind kind() const { return kind_; }
+  // The DHT11's last transaction, also while no sensor has been found (serial diagnostics).
+  const Dht11Diag& dhtDiag() const { return dht_.diag(); }
+  uint32_t dhtDueAtMs() const { return dht_.dueAtMs(); }
   // "SHT31 at 0x44", "SHT31 at 0x45", "DHT11 on GPIO4" or "none".
   const char* name() const { return name_; }
 

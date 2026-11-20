@@ -135,14 +135,18 @@ Type these commands in the monitor and press Enter:
       shows which temperature/humidity sensor is in use.
 - [ ] `raw`: one line like
       `soil_raw=3120 temperature_c=23.41 humidity_pct=51.07 lux=312.5 (temp/humidity: SHT31 at 0x44)`.
-  - SHT31: temperature 5–40 °C and humidity 10–95 %. DHT11: 0–50 °C and 20–90 %, usually in
-    whole numbers (`23.00`). Within 2 s of the last DHT11 read, `raw` repeats that read.
+  - SHT31: temperature 5–40 °C and humidity 10–95 %. DHT11: 0–50 °C and, in a room, 20–60 %,
+    usually in whole numbers (`23.00`). Within 2 s of the last DHT11 read, `raw` repeats that
+    read. With a DHT11 (or no sensor found) `raw` prints a second `dht11 …` line with the raw
+    bytes; [§10](#10-humidity-check-dht11) explains it.
   - Lux above 0 in room light and ≤ 5 when you cover the GY-302 with your finger: the BH1750 works.
   - `null` for a value means that sensor did not answer: recheck its wires.
 - [ ] `soilcheck`: follow the prompts (sensor in the air, then in a glass of water up to the white
       line). It ends with a verdict. **OK** means the soil sensor is good; any other verdict prints
       what to do. The full table is in [WIRING.md](WIRING.md). Telemetry keeps running during
       the check; nothing is saved or sent.
+
+- [ ] With a DHT11: `dhtwatch` and the breath test in [§10](#10-humidity-check-dht11).
 
 `help` lists every command.
 
@@ -215,3 +219,69 @@ grep -ci nan soak.log                                                     # NaN 
 
 Plug the board into the Mac and run `pio run -e esp32dev -t upload`. The settings survive an
 upload. Only `pio run -e esp32dev -t erase` clears them (the setup page then opens again).
+
+## 10. Humidity check (DHT11)
+
+Run this when a DHT11 is in use and humidity looks wrong, for example stuck at 5–8 % in a room
+that is really 30–50 %. It tells a worn sensor apart from a wiring, timing or supply problem.
+Paste the output when you ask for help.
+
+**1. One read with its raw bytes.** Type `raw`. With a DHT11 you get two lines:
+
+```
+soil_raw=3120 temperature_c=23.00 humidity_pct=44.00 lux=312.5 (temp/humidity: DHT11 on GPIO4)
+dht11 bytes=2C 00 17 00 43 checksum=ok bit0_us=22..26 bit1_us=68..73 start_us=20110 age_ms=3
+```
+
+- `bytes`: the five bytes the sensor sent, in hex: humidity, humidity tenths, temperature,
+  temperature tenths, checksum. `2C` is 44 %RH, `17` is 23 °C. The firmware prints exactly what
+  is in the first and third byte; it doesn't scale, clamp or round them.
+- `checksum=ok`: the fifth byte matches the sum of the first four.
+- `bit0_us` / `bit1_us`: the shortest and longest high pulse, in microseconds, of the bits read
+  as 0 and as 1 (the firmware splits them at 50 µs; the datasheet says 23–27 and 68–74).
+- `start_us`: how long the board held the line low to wake the sensor (datasheet: 18000–30000).
+- `age_ms`: how long ago that read was; within 2 s of a read, `raw` shows the same one again.
+
+Healthy: `checksum=ok`, `bit0_us` inside about 15..35, `bit1_us` inside about 60..80, `start_us`
+between 18000 and 30000, and a first byte between `14` and `3C` (20–60 %RH) in a room.
+
+**2. Breath test.** Type `dhtwatch`. It reads every 2 s for 30 s, one line per read. After three
+or four lines, breathe on the grille from about 5 cm for 2–3 s, then leave it alone.
+
+```
+   0 s  humidity_pct=44.0 temperature_c=23.0 bytes=2C 00 17 00 43 checksum=ok bit0_us=22..26 bit1_us=68..73 start_us=20108
+   2 s  humidity_pct=44.0 temperature_c=23.0 bytes=2C 00 17 00 43 checksum=ok bit0_us=22..26 bit1_us=68..74 start_us=20104
+   …
+  10 s  humidity_pct=78.0 temperature_c=24.0 bytes=4E 00 18 00 66 checksum=ok bit0_us=22..26 bit1_us=68..73 start_us=20111
+   …
+dhtwatch done: 16 reads, 0 failed, humidity_pct min 44.0 max 81.0.
+```
+
+Healthy: it rises by 20 %RH or more within a few seconds of breathing and falls back towards
+the start value by the end. Type `q` and Enter to stop early.
+
+**3. Check the supply.** With the board running, measure with a multimeter between DHT11 pin 1
+(VDD) and pin 4 (GND). It should read 3.2–3.4 V. The datasheet specifies the accuracy at 5 V and
+warns that on 3.3 V, long or thin wires drop enough voltage to skew the reading, so keep the
+DHT11's wires under 1 m and run VDD straight to a 3V3 pin. Don't move it to 5 V: DATA would then
+swing to 5 V on a 3.3 V pin (see [WIRING.md](WIRING.md#dht11-instead-of-the-sht31)).
+
+**What the results mean:**
+
+| You see | Meaning | Do this |
+|---|---|---|
+| `checksum=ok`, pulse widths healthy, supply 3.2–3.4 V, humidity 5–8 % in a normal room but it jumps up when you breathe on it | The sensor itself reports a value far too low: its humidity element has drifted (dried out over a long time, or exposed to solvent, glue or foam vapours) or it is a weak part. 5 % is the lowest value an ASAIR DHT11 can report. The firmware and the wiring are fine | Rehydrate it (below). If it still reads low, replace the DHT11 or fit an SHT31 (it is used automatically at the next boot) |
+| As above, but the supply is below 3.2 V | Not enough voltage at the sensor | Shorter or thicker wires, VDD straight to a 3V3 pin, then repeat steps 1–2 |
+| `checksum=bad`, or `bit0_us` going above ~40 or `bit1_us` below ~60 | The signal is distorted: long wires, a loose contact, a weak pull-up | Re-seat the wires, keep them short, check the 10 kΩ (brown-black-orange) between DATA and 3V3. A 4.7 kΩ pull-up helps on longer wires |
+| `error=line_low` | DATA stays low after the board lets go: no pull-up, or DATA touches GND | Check the 10 kΩ between pin 2 and 3V3, and that pin 2 and pin 4 aren't in the same row |
+| `error=no_response` | The sensor never answers: no power, DATA not on GPIO4, or pins swapped | Recheck the wiring table in [WIRING.md](WIRING.md#dht11-instead-of-the-sht31) |
+| `error=response_cut` or `error=bit_timeout` | The reply stopped half way: a loose contact or noise | Re-seat the sensor and wires; if it keeps happening, replace the sensor |
+| `start_us` outside 18000–30000 | Board-side timing is off | Paste the output in an issue; this is a firmware problem |
+| Humidity normal in `raw` but wrong on the dashboard | Not the sensor | Compare with the telemetry on the Pi (§7): `humidity_pct` there is the same number |
+
+**Rehydrating a DHT11 that reads low.** The datasheet's recovery for a low reading is 24 h at
+25 °C and 85 %RH. At home: put the unplugged sensor in a closed food box together with a bottle
+cap of table salt wetted to a wet-sand paste (salt and water, not dissolved), without touching
+it, for 24 h at room temperature. That holds about 75 %RH without condensation. Then rewire it,
+wait a few minutes and repeat steps 1–2. A healthy DHT11 reads within about ±5 %RH of a reference
+hygrometer. One that stays far too low has drifted for good: replace it.

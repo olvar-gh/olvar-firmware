@@ -1,8 +1,14 @@
 // DHT11 frame decoding and the 2 s read pacing (lib/olvar_core/src/dht11.*).
+#include <string.h>
 #include <unity.h>
+
+#include <vector>
 
 #include "dht11.h"
 
+using olvar::Dht11Diag;
+using olvar::Dht11Pulses;
+using olvar::Dht11Stage;
 using olvar::Dht11Throttle;
 using olvar::dht11Decode;
 using olvar::dht11PulsesToBytes;
@@ -79,6 +85,172 @@ static void test_pulses_to_bytes_uses_50us_threshold() {
   pulses[39] = 49;
   dht11PulsesToBytes(pulses, bytes);
   TEST_ASSERT_EQUAL_UINT8_ARRAY(kGood, bytes, 5);
+}
+
+// The ASAIR part reports 5 %RH at the bottom of its 5-95 %RH range. A frame that says so with a
+// valid checksum is passed through as is: the firmware neither makes nor hides that value.
+static void test_floor_humidity_frame_passes_through() {
+  const uint8_t bytes[5] = {0x05, 0x00, 0x19, 0x03, 0x21};
+  TempHumidity r = dht11Decode(bytes);
+  TEST_ASSERT_TRUE(r.humidity_pct.ok);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 5.0f, r.humidity_pct.v);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 25.3f, r.temperature_c.v);
+}
+
+// A misread data bit never yields a plausible wrong value: the checksum rejects every single-bit
+// error, so a timing fault shows up as null, not as a steady low humidity.
+static void test_every_single_bit_error_is_rejected() {
+  for (size_t bit = 0; bit < kDht11Bits; ++bit) {
+    uint8_t bytes[5];
+    memcpy(bytes, kGood, 5);
+    bytes[bit / 8] ^= static_cast<uint8_t>(0x80 >> (bit % 8));
+    TEST_ASSERT_FALSE_MESSAGE(dht11Decode(bytes).humidity_pct.ok, "single-bit error accepted");
+  }
+}
+
+// A simulated bus: one entry per microsecond, each level() call advances the clock by 1 us.
+struct FakeLine {
+  std::vector<uint8_t> wave;
+  size_t t = 0;
+  int idle = 1;
+  int level() {
+    int l = t < wave.size() ? wave[t] : idle;
+    ++t;
+    return l;
+  }
+  uint32_t us() { return static_cast<uint32_t>(t); }
+  void add(int level, int us) { wave.insert(wave.end(), us, static_cast<uint8_t>(level)); }
+};
+
+// The line right after the host releases it: riseUs still low, then a datasheet reply with
+// `bits` data bits of `bytes` (0: 24 us high, 1: 71 us high).
+static FakeLine reply(const uint8_t bytes[5], int riseUs, size_t bits = kDht11Bits) {
+  FakeLine line;
+  line.add(0, riseUs);
+  line.add(1, 13);  // host release, Tgo
+  line.add(0, 83);  // response low
+  line.add(1, 87);  // response high
+  for (size_t i = 0; i < bits; ++i) {
+    line.add(0, 54);
+    line.add(1, (bytes[i / 8] >> (7 - i % 8)) & 1 ? 71 : 24);
+  }
+  line.add(0, 54);  // end of frame, then the pull-up
+  return line;
+}
+
+static void test_walk_reads_a_whole_reply() {
+  FakeLine line = reply(kGood, 0);
+  Dht11Pulses p;
+  olvar::dht11WalkReply(line, p);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Dht11Stage::Done), static_cast<int>(p.stage));
+  TEST_ASSERT_EQUAL_UINT8(kDht11Bits, p.bits);
+  uint8_t bytes[5];
+  dht11PulsesToBytes(p.highUs, bytes);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(kGood, bytes, 5);
+}
+
+// The line can still read low for a moment after the release while the pull-up raises it. The
+// old walk took that for the response, timed the 87 us response high as bit 0 and shifted the
+// frame by one bit (always a bad checksum). Now the rise is waited out first.
+static void test_walk_waits_for_the_release_to_rise() {
+  for (int rise : {1, 3, 10}) {
+    FakeLine line = reply(kGood, rise);
+    Dht11Pulses p;
+    olvar::dht11WalkReply(line, p);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(Dht11Stage::Done), static_cast<int>(p.stage));
+    uint8_t bytes[5];
+    dht11PulsesToBytes(p.highUs, bytes);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(kGood, bytes, 5);
+  }
+}
+
+static void test_walk_line_held_low() {
+  FakeLine line;
+  line.idle = 0;
+  Dht11Pulses p;
+  olvar::dht11WalkReply(line, p);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Dht11Stage::Release), static_cast<int>(p.stage));
+}
+
+static void test_walk_no_sensor() {
+  FakeLine line;  // pull-up only
+  Dht11Pulses p;
+  olvar::dht11WalkReply(line, p);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Dht11Stage::NoResponse), static_cast<int>(p.stage));
+  TEST_ASSERT_EQUAL_UINT8(0, p.bits);
+}
+
+static void test_walk_stops_at_a_missing_bit() {
+  FakeLine line = reply(kGood, 0, 17);
+  line.idle = 0;  // the sensor stops mid-frame and the line stays low
+  Dht11Pulses p;
+  olvar::dht11WalkReply(line, p);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Dht11Stage::Data), static_cast<int>(p.stage));
+  TEST_ASSERT_EQUAL_UINT8(17, p.bits);  // 17 bits timed, then the low phase never ends
+}
+
+static Dht11Pulses pulsesFor(const uint8_t bytes[5], uint16_t zeroUs, uint16_t oneUs) {
+  Dht11Pulses p;
+  p.stage = Dht11Stage::Done;
+  p.bits = kDht11Bits;
+  for (size_t i = 0; i < kDht11Bits; ++i) p.highUs[i] = (bytes[i / 8] >> (7 - i % 8)) & 1 ? oneUs : zeroUs;
+  return p;
+}
+
+static void test_diagnose_reports_bytes_checksum_and_widths() {
+  Dht11Pulses p = pulsesFor(kGood, 24, 70);
+  p.highUs[0] = 21;  // a 0 bit
+  p.highUs[2] = 74;  // a 1 bit (45 = 0b00101101)
+  Dht11Diag d = olvar::dht11Diagnose(p);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(kGood, d.bytes, 5);
+  TEST_ASSERT_TRUE(d.checksumOk);
+  TEST_ASSERT_EQUAL_UINT16(21, d.zeroMinUs);
+  TEST_ASSERT_EQUAL_UINT16(24, d.zeroMaxUs);
+  TEST_ASSERT_EQUAL_UINT16(70, d.oneMinUs);
+  TEST_ASSERT_EQUAL_UINT16(74, d.oneMaxUs);
+  TEST_ASSERT_EQUAL_UINT8(kDht11Bits, d.zeros + d.ones);
+
+  const uint8_t bad[5] = {45, 0, 23, 4, 73};
+  TEST_ASSERT_FALSE(olvar::dht11Diagnose(pulsesFor(bad, 24, 70)).checksumOk);
+}
+
+static void test_format_good_frame() {
+  const uint8_t bytes[5] = {0x05, 0x00, 0x19, 0x03, 0x21};
+  Dht11Diag d = olvar::dht11Diagnose(pulsesFor(bytes, 24, 71));
+  d.startLowUs = 20105;
+  char out[128];
+  size_t n = olvar::formatDht11Diag(d, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("bytes=05 00 19 03 21 checksum=ok bit0_us=24..24 bit1_us=71..71 start_us=20105", out);
+  TEST_ASSERT_EQUAL_size_t(strlen(out), n);
+}
+
+static void test_format_errors() {
+  Dht11Diag d;
+  d.startLowUs = 20100;
+  d.stage = Dht11Stage::NoResponse;
+  char out[128];
+  olvar::formatDht11Diag(d, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("error=no_response bits=0 bit0_us=none bit1_us=none start_us=20100", out);
+  d.stage = Dht11Stage::Release;
+  olvar::formatDht11Diag(d, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("error=line_low bits=0 bit0_us=none bit1_us=none start_us=20100", out);
+  Dht11Pulses p = pulsesFor(kGood, 25, 72);
+  p.stage = Dht11Stage::Data;
+  p.bits = 16;
+  d = olvar::dht11Diagnose(p);
+  d.startLowUs = 20100;
+  olvar::formatDht11Diag(d, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("error=bit_timeout bits=16 bit0_us=25..25 bit1_us=72..72 start_us=20100", out);
+  d.stage = Dht11Stage::Response;
+  olvar::formatDht11Diag(d, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING_LEN("error=response_cut", out, 18);
+}
+
+static void test_format_never_truncates() {
+  Dht11Diag d = olvar::dht11Diagnose(pulsesFor(kGood, 24, 70));
+  char out[20];
+  TEST_ASSERT_EQUAL_size_t(0, olvar::formatDht11Diag(d, out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("", out);
 }
 
 static void test_throttle_allows_one_read_per_2s() {
@@ -172,6 +344,17 @@ int main(int, char**) {
   RUN_TEST(test_two_digit_fractions);
   RUN_TEST(test_out_of_range_gives_null);
   RUN_TEST(test_pulses_to_bytes_uses_50us_threshold);
+  RUN_TEST(test_floor_humidity_frame_passes_through);
+  RUN_TEST(test_every_single_bit_error_is_rejected);
+  RUN_TEST(test_walk_reads_a_whole_reply);
+  RUN_TEST(test_walk_waits_for_the_release_to_rise);
+  RUN_TEST(test_walk_line_held_low);
+  RUN_TEST(test_walk_no_sensor);
+  RUN_TEST(test_walk_stops_at_a_missing_bit);
+  RUN_TEST(test_diagnose_reports_bytes_checksum_and_widths);
+  RUN_TEST(test_format_good_frame);
+  RUN_TEST(test_format_errors);
+  RUN_TEST(test_format_never_truncates);
   RUN_TEST(test_throttle_allows_one_read_per_2s);
   RUN_TEST(test_throttle_survives_millis_wrap);
   RUN_TEST(test_throttle_due_at_is_absolute);

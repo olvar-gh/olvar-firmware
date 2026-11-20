@@ -13,7 +13,8 @@ struct Entry {
 
 constexpr Entry kCommands[] = {
     {"status", Cmd::Status}, {"raw", Cmd::Raw},       {"soilcheck", Cmd::SoilCheck},
-    {"portal", Cmd::Portal}, {"reboot", Cmd::Reboot}, {"help", Cmd::Help},
+    {"dhtwatch", Cmd::DhtWatch}, {"portal", Cmd::Portal}, {"reboot", Cmd::Reboot},
+    {"help", Cmd::Help},
 };
 
 bool isSpace(char c) { return isspace(static_cast<unsigned char>(c)) != 0; }
