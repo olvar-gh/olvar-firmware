@@ -43,6 +43,7 @@ static SerialCli shell(io, climate, bh, soil,
                                   s.mqtt_state = "disconnected";
                                   s.seq = 42;
                                   s.skipped = 3;
+                                  s.link = "this boot:\n  reset    SW (software restart)\n";
                                 },
                                 [] { ++portalRequests; }, [] { ++reboots; }});
 
@@ -71,7 +72,7 @@ void test_help_and_unknown() {
 void test_status_prints_every_field() {
   run("status\n");
   for (const char* key : {"device_id olvar-a1b2c3", "boot_id   9f3c07ab", "wifi", "mqtt      disconnected",
-                          "seq       42", "skipped   3", "climate   ", "heap"}) {
+                          "seq       42", "skipped   3", "climate   ", "heap", "this boot:\n  reset    SW"}) {
     contains(key);
   }
 }

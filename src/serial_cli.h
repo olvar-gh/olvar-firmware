@@ -136,6 +136,8 @@ struct CliStatus {
   const char* mqtt_state = "unknown";
   uint32_t seq = 0;
   uint32_t skipped = 0;
+  // Multi-line link reason records (this boot and the previous one), or null.
+  const char* link = nullptr;
 };
 
 // Wired by the app (T8) to the settings store, provisioning and MQTT link.

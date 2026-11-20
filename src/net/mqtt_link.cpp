@@ -1,9 +1,11 @@
 #include "net/mqtt_link.h"
 
 #include <ESPmDNS.h>
+#include <WiFi.h>
 #include <string.h>
 
 #include "ids.h"
+#include "link_record.h"
 #include "telemetry.h"
 
 namespace olvar {
@@ -41,6 +43,10 @@ bool MqttLink::begin(const Config& cfg) {
   }
   port_ = cfg.port;
   session_ = MqttSession(millis());
+  if (!parseIpv4(host_, hostIp_)) hostIp_ = 0;
+  broker_ = BrokerAddress();
+  broker_.remember(cfg.rememberedIp);
+  onBrokerIp_ = cfg.onBrokerIp;
 
   client_.setClientId(deviceId_)
       .setCredentials(deviceId_, password_)
@@ -55,27 +61,58 @@ bool MqttLink::begin(const Config& cfg) {
   return true;
 }
 
+uint32_t MqttLink::resolve() {
+  if (mdnsStale_ || broker_.mdnsRestartDue()) {
+    // mDNS is restarted after a Wi-Fi reconnect and after repeated failed lookups, in case
+    // the responder lost its socket with the old association.
+    if (mdnsStarted_) MDNS.end();
+    mdnsStarted_ = false;
+    mdnsStale_ = false;
+  }
+  IPAddress ip;
+  if (isLocalName(host_)) {
+    // Resolved here with an explicit timeout. The query blocks loop() for up to
+    // kMdnsTimeoutMs, once per attempt, which the backoff keeps rare.
+    if (!mdnsStarted_) mdnsStarted_ = MDNS.begin(deviceId_);
+    char name[sizeof host_];
+    strlcpy(name, host_, strlen(host_) - (sizeof(kLocalSuffix) - 1) + 1);
+    ip = MDNS.queryHost(name, kMdnsTimeoutMs);
+  } else if (!WiFi.hostByName(host_, ip)) {
+    ip = IPAddress();
+  }
+  // Only IPv4 is remembered; an IPv6-only answer counts as a failed lookup.
+  if (ip.type() != IPv4) return 0;
+  return static_cast<uint32_t>(ip);
+}
+
+bool MqttLink::brokerIp(IPAddress& out) {
+  if (hostIp_ != 0) {
+    out = IPAddress(hostIp_);
+    return true;
+  }
+  const uint32_t ip = broker_.choose(resolve());
+  if (ip == 0) {
+    Serial.printf("[mqtt] cannot resolve %s and no address is remembered\n", host_);
+    return false;
+  }
+  out = IPAddress(ip);
+  if (broker_.source() == BrokerAddress::Source::Remembered) {
+    Serial.printf("[mqtt] cannot resolve %s, trying the remembered %s\n", host_, out.toString().c_str());
+  }
+  return true;
+}
+
 bool MqttLink::startConnect() {
   // espMqttClient keeps unacked QoS 1 PUBLISH packets across a disconnect (_clearQueue(0))
   // and even after a clean-session CONNACK (_clearQueue(1)), so without this it would resend
   // old telemetry after a reconnect and the gateway would stamp it with the wrong time.
   client_.clearQueue(true);
-  if (isLocalName(host_)) {
-    // Arduino network clients cannot resolve *.local themselves. The query blocks loop() for
-    // up to kMdnsTimeoutMs, once per attempt, which the backoff keeps rare.
-    if (!mdnsStarted_) mdnsStarted_ = MDNS.begin(deviceId_);
-    char name[sizeof host_];
-    strlcpy(name, host_, strlen(host_) - (sizeof(kLocalSuffix) - 1) + 1);
-    const IPAddress ip = MDNS.queryHost(name, kMdnsTimeoutMs);
-    if (ip == IPAddress()) {
-      Serial.printf("[mqtt] cannot resolve %s\n", host_);
-      return false;
-    }
-    client_.setServer(ip, port_);
-  } else {
-    client_.setServer(host_, port_);
-  }
-  Serial.printf("[mqtt] connecting to %s:%u\n", host_, port_);
+  // Always dial an address: the client task would otherwise do its own DNS lookup, and a
+  // failed lookup there looks like any other TCP failure, with no fallback.
+  IPAddress ip;
+  if (!brokerIp(ip)) return false;
+  client_.setServer(ip, port_);
+  Serial.printf("[mqtt] connecting to %s (%s):%u\n", host_, ip.toString().c_str(), port_);
   return client_.connect();
 }
 
@@ -83,7 +120,18 @@ void MqttLink::loop(bool wifiUp) {
   const uint32_t now = millis();
   if (pending_.reconcile(acks_)) session_.acked(now);
 
-  switch (session_.poll(now, wifiUp, client_.connected(), client_.disconnected(), rand01k())) {
+  const uint32_t connects = session_.connects();
+  const uint32_t ackTimeouts = session_.ackTimeouts();
+  const MqttSession::Action action =
+      session_.poll(now, wifiUp, client_.connected(), client_.disconnected(), rand01k());
+  if (session_.connects() != connects && broker_.connected() && onBrokerIp_) {
+    onBrokerIp_(broker_.known());
+  }
+  if (session_.ackTimeouts() != ackTimeouts) {
+    Serial.printf("[mqtt] no PUBACK for %lu s, dropping the session\n",
+                  static_cast<unsigned long>(MqttSession::kAckTimeoutMs / 1000));
+  }
+  switch (action) {
     case MqttSession::Action::None:
       break;
     case MqttSession::Action::Connect:
@@ -96,9 +144,7 @@ void MqttLink::loop(bool wifiUp) {
       acks_.clear();
       pending_.clear();
       Serial.printf("[mqtt] disconnected: %s, discarded %u queued packet(s)\n",
-                    espMqttClientTypes::disconnectReasonToString(
-                        static_cast<espMqttClientTypes::DisconnectReason>(disconnectReason_.load())),
-                    static_cast<unsigned>(dropped));
+                    mqttReasonName(disconnectReason_.load()), static_cast<unsigned>(dropped));
       break;
     }
     case MqttSession::Action::PublishOnline:
@@ -110,12 +156,6 @@ void MqttLink::loop(bool wifiUp) {
     case MqttSession::Action::Abort:
       Serial.println("[mqtt] connect timed out");
       client_.disconnect(true);
-      break;
-    case MqttSession::Action::Restart:
-      Serial.printf("[mqtt] no acknowledged telemetry for %lu s, restarting\n",
-                    static_cast<unsigned long>(session_.msSinceAck(now) / 1000));
-      goOffline();
-      ESP.restart();
       break;
   }
 }
@@ -137,7 +177,7 @@ bool MqttLink::publishTelemetry(const Reading& r, uint32_t uptimeMs, OptI rssi) 
     return false;
   }
   pending_.add(id);
-  session_.handedOff();
+  session_.handedOff(millis());
   return true;
 }
 
