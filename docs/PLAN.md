@@ -187,8 +187,8 @@ boot ─► make boot_id ─► load Settings (NVS) ─► if no Wi-Fi creds OR 
 loop:  serial CLI poll │ BOOT long-press check │ every 60 s:
          read SHT31 ─► read BH1750 ─► sample soil ─► build Reading (nullable fields)
          ─► if MQTT connected: publish telemetry (QoS 1), seq++ ; else: drop, count skipped
-       on MQTT disconnect: discard unacked telemetry; reconnect with backoff (1 s → 60 s, ±20 % jitter)
-       supervisor: no successful publish for 10 min → publish "offline" (if possible) → restart
+       on MQTT disconnect: discard unacked telemetry; reconnect with backoff (1 s → 15 s, ±20 % jitter)
+       recovery ladder (BRINGUP §11): PUBACK missing 30 s → new MQTT session; no ack 100 s → Wi-Fi reconnect; 10 min → publish "offline" (if possible) → restart
        status LED: slow blink = no Wi-Fi, fast blink = no MQTT, short flash = published
 ```
 
@@ -405,7 +405,7 @@ No hardware. The gateway reuses the fixtures and the simulator.
 **Owns:** `src/net/wifi_link.*`, `src/net/mqtt_link.*`.
 **Acceptance:**
 - STA mode with `setAutoReconnect(true)`, hostname = device_id, and disconnect reasons logged.
-- `MqttLink` sets client id = username = device_id, the password, clean session, keepalive 30 s, and the will (`status`, `offline`, QoS 1, retain). On connect it publishes retained `online`.
+- `MqttLink` sets client id = username = device_id, the password, clean session, keepalive 15 s, and the will (`status`, `offline`, QoS 1, retain). On connect it publishes retained `online`.
 - `MqttLink` keeps a `skipped` counter for intervals dropped while disconnected. T7's `status` command prints it.
 - `seq` is incremented only when `publishTelemetry()` hands a message to the client, so skipped intervals don't use a number.
 - A message discarded unacknowledged on disconnect keeps its number: `seq` is never reused, because the broker may already have received it. That leaves a gap of 1 or more.
@@ -414,7 +414,7 @@ No hardware. The gateway reuses the fixtures and the simulator.
 - Reconnect uses `Backoff(1000, 60000)` from `loop()`, never from a callback.
 - `.local` hosts are resolved via `MDNS.queryHost`.
 - `goOffline()` publishes `offline` (≤500 ms) before a deliberate restart.
-- Supervisor: no successful publish for 10 min → restart.
+- Supervisor: no successful publish for 10 min → restart (the last stage of the recovery ladder, BRINGUP §11).
 
 **Verify on hardware + Pi:**
 - `mosquitto_sub -h <pi> -u <user> -P <pw> -v -q 1 -t 'olvar/v1/#'` shows `online` (retained) and telemetry every 60 s with `boot_id` constant and `seq` increasing.

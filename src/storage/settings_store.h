@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "link_recovery.h"
 #include "settings.h"
 
 namespace olvar {
@@ -39,6 +40,8 @@ class SettingsStore {
   static constexpr const char* kKeyMqttPass = "mq_pass";
   static constexpr const char* kKeyPortal = "portal";
   static constexpr const char* kKeyStaged = "n_commit";
+  // "<ip> <mq_host>": the last address mq_host resolved to that accepted an MQTT connection.
+  static constexpr const char* kKeyBrokerIp = "mq_last";
 
   explicit SettingsStore(KvStore& kv) : kv_(kv) {}
 
@@ -50,6 +53,10 @@ class SettingsStore {
   bool clear();
 
   bool portalRequested();
+
+  // The remembered broker address for this host (0 if none, or learnt for another host).
+  uint32_t brokerIp(const char* host);
+  bool setBrokerIp(uint32_t ip, const char* host);
   bool setPortalRequested(bool on);
 
  private:

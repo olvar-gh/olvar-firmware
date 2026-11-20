@@ -10,10 +10,11 @@ Settings live in NVS, Preferences namespace `olvar`:
 | Key       | Field       | Notes |
 |-----------|-------------|-------|
 | `dev_id`  | `device_id` | Also the MQTT client id and MQTT username. Rule `^[a-z0-9][a-z0-9-]{2,31}$`, `olvar-gateway` is reserved. |
-| `mq_host` | MQTT host   | IP address or host name (letters, digits, `.`, `-`). `*.local` is resolved by the MQTT link. |
+| `mq_host` | MQTT host   | IP address or host name (letters, digits, `.`, `-`). `*.local` is resolved by the MQTT link. An IP address with a DHCP reservation for the Pi is the most robust choice ([BRINGUP §11](BRINGUP.md#11-link-drops-and-the-link-record)). |
 | `mq_port` | MQTT port   | 1-65535, default 1883. |
 | `mq_pass` | MQTT password | Per-device password from the gateway's `mosquitto_passwd`. |
 | `portal`  | portal flag | Present (true) only while the portal has been requested. |
+| `mq_last` | remembered broker address | `"<ip> <mq_host>"`, written by the MQTT link when a resolved address accepts a connection; used only for that same `mq_host` when its name does not resolve. |
 
 There is no username key: the MQTT username is always `device_id`.
 The Wi-Fi network and its password are stored by the ESP32 Wi-Fi driver, not in `olvar`.

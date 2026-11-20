@@ -122,6 +122,23 @@ bool SettingsStore::clear() {
   return ok;
 }
 
+uint32_t SettingsStore::brokerIp(const char* host) {
+  if (!kv_.begin(kNamespace, true)) return 0;
+  char memo[kBrokerMemoLen];
+  const bool ok = kv_.getString(kKeyBrokerIp, memo, sizeof memo);
+  kv_.end();
+  return ok ? parseBrokerMemo(memo, host) : 0;
+}
+
+bool SettingsStore::setBrokerIp(uint32_t ip, const char* host) {
+  char memo[kBrokerMemoLen];
+  if (!formatBrokerMemo(ip, host, memo, sizeof memo)) return false;
+  if (!kv_.begin(kNamespace, false)) return false;
+  const bool ok = kv_.putString(kKeyBrokerIp, memo);
+  kv_.end();
+  return ok;
+}
+
 bool SettingsStore::portalRequested() {
   if (!kv_.begin(kNamespace, true)) return false;
   const bool on = kv_.getBool(kKeyPortal, false);

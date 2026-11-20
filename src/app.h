@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "link_record.h"
+#include "link_recovery.h"
 #include "net/mqtt_link.h"
 #include "status_led.h"
 
@@ -73,7 +75,11 @@ class App {
   Reading readSensors();
   void sendTelemetry();
   void fillStatus(CliStatus& s);
-  [[noreturn]] void restart();
+  void recover();
+  // Copies the links' state into the RTC reason record.
+  void updateLinkRecord();
+  void printLinkRecord(const LinkRecord& r, const char* indent, char* out, size_t cap);
+  [[noreturn]] void restart(RestartCause cause);
 
   I2cBus bus_;
   ClimateSensor climate_;
@@ -87,6 +93,14 @@ class App {
   StatusLed led_;
   SerialCli console_;
   TelemetrySchedule schedule_;
+  LinkRecovery recovery_;
+  uint32_t wifiUps_ = 0;
+  uint32_t recordAtMs_ = 0;
+  // What the boot before this one left in RTC memory.
+  LinkRecord prevRecord_ = {};
+  bool prevRecordValid_ = false;
+  // `status` output of the reason records; long, so not on the stack.
+  char linkText_[1200] = {};
   // A due message waits here until sendAtMs_ while a DHT11 converts a fresh sample (~2 s).
   bool sendPending_ = false;
   uint32_t sendAtMs_ = 0;

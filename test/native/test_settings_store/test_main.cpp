@@ -292,6 +292,31 @@ static void test_clear_erases_settings_and_flag() {
   assertSame(d, out);
 }
 
+static void test_broker_ip_is_remembered_per_host() {
+  FakeKv kv;
+  SettingsStore store(kv);
+  TEST_ASSERT_EQUAL_UINT32(0, store.brokerIp("olvar-gw.local"));
+  const uint32_t ip = olvar::ipv4(192, 168, 0, 42);
+  TEST_ASSERT_TRUE(store.setBrokerIp(ip, "olvar-gw.local"));
+  TEST_ASSERT_EQUAL_STRING("192.168.0.42 olvar-gw.local", kv.data["olvar"]["mq_last"].c_str());
+  TEST_ASSERT_EQUAL_UINT32(ip, store.brokerIp("olvar-gw.local"));
+  // Learnt for another host: a new mq_host from the portal never dials the old address.
+  TEST_ASSERT_EQUAL_UINT32(0, store.brokerIp("pi.local"));
+  TEST_ASSERT_FALSE(store.setBrokerIp(0, "olvar-gw.local"));
+  TEST_ASSERT_FALSE(kv.open);
+}
+
+static void test_broker_ip_does_not_disturb_settings() {
+  FakeKv kv;
+  SettingsStore store(kv);
+  TEST_ASSERT_TRUE(store.save(good()));
+  TEST_ASSERT_TRUE(store.setBrokerIp(olvar::ipv4(10, 0, 0, 2), "192.168.1.20"));
+  Settings out;
+  TEST_ASSERT_TRUE(store.load(out, olvar::defaultSettings(kMac)));
+  TEST_ASSERT_EQUAL_STRING("192.168.1.20", out.mqtt_host);
+  TEST_ASSERT_EQUAL(1884, out.mqtt_port);
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_defaults_use_mac_device_id_and_port_1883);
@@ -307,5 +332,7 @@ int main() {
   RUN_TEST(test_portal_flag_set_and_clear);
   RUN_TEST(test_portal_flag_does_not_disturb_settings);
   RUN_TEST(test_clear_erases_settings_and_flag);
+  RUN_TEST(test_broker_ip_is_remembered_per_host);
+  RUN_TEST(test_broker_ip_does_not_disturb_settings);
   return UNITY_END();
 }

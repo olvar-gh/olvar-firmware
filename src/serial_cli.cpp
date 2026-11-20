@@ -229,7 +229,8 @@ void SerialCli::handleLine(const char* line) {
 
 void SerialCli::printHelp() {
   io_.println("Commands:");
-  io_.println("  status     network, MQTT, ids, seq, skipped, temp/humidity sensor, free heap");
+  io_.println("  status     network, MQTT, ids, seq, skipped, temp/humidity sensor, free heap,");
+  io_.println("             and the link record of this boot and the previous one");
   io_.println("  raw        one fresh soil_raw + SHT31/DHT11 + BH1750 reading (wiring check)");
   io_.println("             with a DHT11 also its raw bytes, checksum and bit pulse widths");
   io_.println("  soilcheck  guided air/water soil sensor check (~2 min, nothing is saved)");
@@ -259,6 +260,7 @@ void SerialCli::printStatus() {
   io_.printf("heap      %lu free, %lu min\n", static_cast<unsigned long>(ESP.getFreeHeap()),
              static_cast<unsigned long>(ESP.getMinFreeHeap()));
   io_.printf("uptime    %lu ms\n", static_cast<unsigned long>(millis()));
+  if (s.link != nullptr) io_.print(s.link);
 }
 
 void SerialCli::printRaw() {

@@ -83,7 +83,10 @@ sudo systemctl reload mosquitto
 2. Tap **Configure WiFi**, pick your home network (it must be 2.4 GHz) and type its password.
 3. Fill the fields below it:
    - **Device id**: leave it as it is.
-   - **MQTT host**: the Pi's IP address, e.g. `192.168.1.20`.
+   - **MQTT host**: the Pi's IP address, e.g. `192.168.1.20`. Give the Pi a DHCP reservation in
+     the router first, so that address never changes; this is the most robust setting (see
+     [§11](#11-link-drops-and-the-link-record)). A name like `olvar-gw.local` works too, but it
+     depends on mDNS answers reaching the board.
    - **MQTT port**: `1883`.
    - **MQTT password**: the password from step 3.
 4. Tap **Save**.
@@ -164,7 +167,8 @@ mosquitto_sub -h 192.168.1.20 -u <admin-user> -P '<admin-password>' -v -q 1 -t '
   olvar/v1/olvar-a1b2c3/telemetry {"device_id":"olvar-a1b2c3","boot_id":"9f3c07ab","seq":42,"uptime_ms":2520311,"temperature_c":23.41,"humidity_pct":51.07,"lux":312.5,"soil_raw":2210,"rssi_dbm":-61,"fw":"0.1.0+a1b2c3d"}
   ```
 - [ ] `boot_id` stays the same and `seq` goes up by one each minute.
-- [ ] Unplug the board's USB: within about 45 s the status changes to `offline`.
+- [ ] Unplug the board's USB: within about 25 s (1.5 × the 15 s keepalive) the status changes to
+      `offline`.
 
 Once this works, place the soil sensor in the pot and calibrate it in the dashboard
 (PLAN.md §7.6).
@@ -186,6 +190,11 @@ the pull-up on DATA would feed the sensor through its data pin.
 - [ ] The board reconnects by itself (`boot_id` unchanged) and the first message after the
       reconnect arrives within a minute.
 - [ ] The serial `status` shows `skipped` ≥ 1 (about 2 for a 2-minute outage).
+
+**Wi-Fi outage.** Switch the router's 2.4 GHz radio off (or unplug the router) for 2 minutes,
+then back on.
+- [ ] Within about a minute of the network being back, telemetry flows again with the same
+      `boot_id` (no restart). `status` shows the Wi-Fi drop under `this boot:`.
 
 **24 h soak.** Leave the board running for 24 hours and log everything on the Pi:
 
@@ -285,3 +294,70 @@ cap of table salt wetted to a wet-sand paste (salt and water, not dissolved), wi
 it, for 24 h at room temperature. That holds about 75 %RH without condensation. Then rewire it,
 wait a few minutes and repeat steps 1–2. A healthy DHT11 reads within about ±5 %RH of a reference
 hygrometer. One that stays far too low has drifted for good: replace it.
+
+## 11. Link drops and the link record
+
+The board repairs its own link in stages, counted from the last telemetry message the broker
+acknowledged (one is sent every 60 s):
+
+| When | What the board does | Serial line |
+|---|---|---|
+| Wi-Fi down for 30 s | asks the Wi-Fi driver to connect again, then every 30 s (the core gives up after some disconnect reasons) | `[wifi] down for 30 s …, reconnecting` |
+| a message unacked for 30 s | drops the MQTT session and opens a new one (1 s to 15 s apart) | `[mqtt] no PUBACK for 30 s, dropping the session` |
+| broker name does not resolve | dials the last address that name resolved to and that accepted a connection (kept in NVS across restarts); restarts mDNS after every 2nd failed lookup in a row | `[mqtt] cannot resolve olvar-gw.local, trying the remembered 192.168.0.42` |
+| no acked telemetry for 100 s | full Wi-Fi reconnect (new association and DHCP lease) and mDNS restart, again every 100 s | `[link] no acknowledged telemetry for 100 s, resetting Wi-Fi` |
+| no acked telemetry for 10 min | restart, the last resort | `[link] no acknowledged telemetry for 600 s, restarting` |
+
+Readings taken while the link is down are dropped, never sent late (`skipped` in `status` counts
+them).
+
+### Most robust setting
+
+Give the Pi a **DHCP reservation** (a fixed address for its MAC) in the router, and enter that
+**IP address as the MQTT host** in the setup portal (`portal` command, or hold BOOT for 3 s).
+Then no name lookup is involved at all. With `olvar-gw.local` the board needs mDNS answers from
+the Pi; some routers and access points drop or delay multicast, and then the name stops
+resolving although the Pi answers ping. The remembered address covers that only while the Pi's
+address stays the same, which again needs the reservation.
+
+### Reading the link record
+
+The board keeps a small record of its link state in memory that survives a restart (not a power
+cut). It prints the previous boot's record right after `reset reason …` at boot, and `status`
+prints the current one (`this boot:`) and the previous one (`previous boot:`):
+
+```
+previous boot:
+  reset    SW (software restart); ended by: supervisor restart (no acknowledged telemetry)
+  uptime   3720 s, 600 s since the last acked telemetry, 0 supervisor restart(s) in a row before
+  wifi     CONNECTED, rssi -71 dBm; 1 drop(s), last reason 200 BEACON_TIMEOUT; 0 retry(s), 5 forced reset(s)
+  mqtt     3 connect(s), 2 drop(s), 1 ack timeout(s), last reason TCP_DISCONNECTED
+  broker   name lookup FAILING; 14 failed lookup(s), 0 fallback(s) to the remembered address
+```
+
+- **reset / ended by**: `reset` is how the described boot itself started. `ended by` says why
+  the firmware restarted it: `supervisor restart` is the 10-minute last resort, `reboot command`
+  and `setup portal requested` are yours. `not restarted by the firmware` means power loss, a
+  crash or a watchdog; the reset reason of the boot after it (the `reset reason` line at boot,
+  or `reset` under `this boot:`) says which: `PANIC`, `TASK_WDT`, `BROWNOUT`, `POWERON`.
+- **uptime**: how long that boot ran and how long the last acked telemetry was ago when the
+  record was last written (every second, and at the restart). `supervisor restart(s) in a row`
+  above 0 means the outage outlived restarts: the problem is outside the board (router, Pi,
+  name resolution).
+- **wifi**: the status and signal at the end. `CONNECTED` with a failing MQTT link points at the
+  network path or the broker; anything else (`DISCONNECTED`, `NO_SSID_AVAIL`, `CONNECT_FAILED`)
+  at Wi-Fi. `last reason` is the 802.11 disconnect reason: `BEACON_TIMEOUT` / `NO_AP_FOUND`
+  mean the board lost the access point (distance, interference, router restart), `AUTH_FAIL` /
+  `4WAY_HANDSHAKE_TIMEOUT` mean it was refused (password, router busy). An RSSI below about
+  -80 dBm is weak; move the board or the router. `retry(s)` count the 30-second reconnects,
+  `forced reset(s)` the 100-second ones.
+- **mqtt**: `connect(s)` are sessions the broker accepted, `drop(s)` sessions that ended,
+  `ack timeout(s)` sessions dropped because the broker stopped acknowledging. `last reason` comes
+  from the MQTT library: `TCP_DISCONNECTED` (connection lost or refused; Mosquitto down, wrong
+  address or port), `MQTT_NOT_AUTHORIZED` / `MQTT_MALFORMED_CREDENTIALS` (password or user; see
+  §3). Many connects with as many drops means the session keeps breaking right after it opens.
+- **broker**: `name lookup FAILING` means the MQTT host name did not resolve at the end.
+  `failed lookup(s)` with `0 fallback(s)` means no address was remembered yet; set an IP address
+  as described above.
+
+Copy both records when you report an outage.

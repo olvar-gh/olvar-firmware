@@ -17,13 +17,13 @@ namespace {
 constexpr uint32_t kMid = 500;
 
 // Mirrors MqttLink::publishTelemetry's bookkeeping: returns the seq sent, or -1 if skipped.
-int64_t publish(MqttSession& s, bool clientAccepts = true) {
+int64_t publish(MqttSession& s, bool clientAccepts = true, uint32_t now = 0) {
   if (!s.canPublish() || !clientAccepts) {
     s.skipped();
     return -1;
   }
   const uint32_t seq = s.seq();
-  s.handedOff();
+  s.handedOff(now);
   return seq;
 }
 
@@ -137,7 +137,7 @@ static void test_failed_attempts_back_off_and_success_resets() {
   TEST_ASSERT_EQUAL(Action::Connect, s.poll(7200 + 1000, true, false, true, kMid));
 }
 
-static void test_backoff_caps_at_60_s_with_jitter() {
+static void test_backoff_caps_at_15_s_with_jitter() {
   MqttSession s(0);
   uint32_t now = 0;
   for (int i = 0; i < 10; ++i) {
@@ -146,7 +146,7 @@ static void test_backoff_caps_at_60_s_with_jitter() {
   }
   const uint32_t failedAt = now;
   while (s.poll(now, true, false, true, 999) != Action::Connect) now += 100;
-  TEST_ASSERT_UINT32_WITHIN(100, 72000, now - failedAt);
+  TEST_ASSERT_UINT32_WITHIN(100, 18000, now - failedAt);
 }
 
 static void test_waits_for_client_to_finish_disconnecting() {
@@ -174,16 +174,49 @@ static void test_stuck_connect_is_aborted_once() {
   TEST_ASSERT_EQUAL(Action::Discard, s.poll(MqttSession::kConnectTimeoutMs + 20, true, false, true, kMid));
 }
 
-static void test_supervisor_restarts_after_10_min_without_ack() {
+static void test_unacked_message_drops_a_session_the_client_still_reports_connected() {
   MqttSession s(0);
   bringUp(s, 0);
-  TEST_ASSERT_EQUAL(Action::None, s.poll(MqttSession::kSupervisorMs - 1, true, true, false, kMid));
-  s.acked(MqttSession::kSupervisorMs - 1);
-  TEST_ASSERT_EQUAL(Action::None, s.poll(2 * MqttSession::kSupervisorMs - 2, true, true, false, kMid));
-  TEST_ASSERT_EQUAL(Action::Restart, s.poll(2 * MqttSession::kSupervisorMs - 1, true, true, false, kMid));
+  TEST_ASSERT_EQUAL(0, publish(s, true, 1000));
+  TEST_ASSERT_EQUAL(1, publish(s, true, 20000));  // the timeout counts from the oldest unacked one
+  const uint32_t due = 1000 + MqttSession::kAckTimeoutMs;
+  TEST_ASSERT_EQUAL(Action::None, s.poll(due - 1, true, true, false, kMid));
+  TEST_ASSERT_EQUAL(Action::Discard, s.poll(due, true, true, false, kMid));
+  TEST_ASSERT_FALSE(s.canPublish());
+  TEST_ASSERT_EQUAL_UINT32(1, s.ackTimeouts());
+  TEST_ASSERT_EQUAL_UINT32(1, s.drops());
 
-  MqttSession never(0);
-  TEST_ASSERT_EQUAL(Action::Restart, never.poll(MqttSession::kSupervisorMs, false, false, true, kMid));
+  // A new session starts with nothing outstanding: no instant second timeout.
+  TEST_ASSERT_EQUAL(Action::None, s.poll(due + 5, true, false, false, kMid));
+  TEST_ASSERT_EQUAL(Action::Connect, s.poll(due + 1000, true, false, true, kMid));
+  TEST_ASSERT_EQUAL(Action::PublishOnline, s.poll(due + 1100, true, true, false, kMid));
+  s.onlinePublished();
+  TEST_ASSERT_EQUAL(Action::None, s.poll(due + 1100 + MqttSession::kAckTimeoutMs, true, true, false, kMid));
+  TEST_ASSERT_EQUAL(2, publish(s, true, due + 2000));
+  TEST_ASSERT_EQUAL_UINT32(2, s.connects());
+}
+
+static void test_any_ack_restarts_the_ack_timeout() {
+  MqttSession s(0);
+  bringUp(s, 0);
+  publish(s, true, 0);
+  s.acked(MqttSession::kAckTimeoutMs - 1);
+  TEST_ASSERT_EQUAL(Action::None, s.poll(5 * MqttSession::kAckTimeoutMs, true, true, false, kMid));
+  publish(s, true, 5 * MqttSession::kAckTimeoutMs);
+  TEST_ASSERT_EQUAL(Action::Discard, s.poll(6 * MqttSession::kAckTimeoutMs, true, true, false, kMid));
+  TEST_ASSERT_EQUAL_UINT32(1, s.ackTimeouts());
+}
+
+static void test_ack_clock_survives_reconnects_and_counts_drops() {
+  MqttSession s(1000);
+  bringUp(s, 1000);
+  s.acked(2000);
+  TEST_ASSERT_EQUAL(Action::Discard, s.poll(3000, true, false, true, kMid));
+  TEST_ASSERT_EQUAL(Action::Connect, s.poll(4000, true, false, true, kMid));
+  TEST_ASSERT_EQUAL(Action::Discard, s.poll(4100, true, false, true, kMid));  // failed attempt
+  TEST_ASSERT_EQUAL_UINT32(1, s.drops());
+  TEST_ASSERT_EQUAL_UINT32(1, s.connects());
+  TEST_ASSERT_EQUAL_UINT32(98000, s.msSinceAck(100000));
 }
 
 static void test_timers_survive_millis_wraparound() {
@@ -194,8 +227,11 @@ static void test_timers_survive_millis_wraparound() {
   TEST_ASSERT_EQUAL(Action::None, s.poll(start + 500, true, false, true, kMid));
   TEST_ASSERT_EQUAL(Action::Connect, s.poll(start + 1010, true, false, true, kMid));
   TEST_ASSERT_EQUAL(Action::PublishOnline, s.poll(start + 1020, true, true, false, kMid));
-  TEST_ASSERT_EQUAL(Action::PublishOnline, s.poll(start + MqttSession::kSupervisorMs - 1, true, true, false, kMid));
-  TEST_ASSERT_EQUAL(Action::Restart, s.poll(start + MqttSession::kSupervisorMs, true, true, false, kMid));
+  s.onlinePublished();
+  publish(s, true, start + 1030);
+  TEST_ASSERT_EQUAL(Action::None, s.poll(start + 1030 + MqttSession::kAckTimeoutMs - 1, true, true, false, kMid));
+  TEST_ASSERT_EQUAL(Action::Discard, s.poll(start + 1030 + MqttSession::kAckTimeoutMs, true, true, false, kMid));
+  TEST_ASSERT_EQUAL_UINT32(1000, s.msSinceAck(start + 1000));
 }
 
 static void test_wifi_loss_ends_a_session_the_client_still_reports_connected() {
@@ -249,20 +285,24 @@ static void test_ack_log_keeps_the_last_slots_and_clears() {
   TEST_ASSERT_FALSE(log.take(4));
 }
 
-static void test_acks_slower_than_the_interval_still_feed_the_supervisor() {
+static void test_acks_slower_than_the_interval_but_within_the_timeout_keep_the_session() {
   MqttSession s(0);
   AckLog log;
   PendingAcks pending;
   bringUp(s, 0);
   uint16_t id = 0;
-  for (uint32_t now = 0; now < 3 * MqttSession::kSupervisorMs; now += 60000) {
+  constexpr uint32_t kStep = 20000;
+  static_assert(kStep < MqttSession::kAckTimeoutMs, "each ack must land within the timeout");
+  for (uint32_t now = 0; now < 30 * kStep; now += kStep) {
     if (now > 0) log.record(id);  // ack for the previous message, after the next is due
     if (pending.reconcile(log)) s.acked(now);
-    TEST_ASSERT_NOT_EQUAL(Action::Restart, s.poll(now, true, true, false, kMid));
-    TEST_ASSERT_TRUE(publish(s) >= 0);
+    TEST_ASSERT_EQUAL(Action::None, s.poll(now, true, true, false, kMid));
+    TEST_ASSERT_TRUE(publish(s, true, now) >= 0);
     pending.add(++id);
     TEST_ASSERT_LESS_OR_EQUAL_UINT32(1, pending.size());
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(kStep, s.msSinceAck(now));
   }
+  TEST_ASSERT_EQUAL_UINT32(0, s.ackTimeouts());
 }
 
 static void test_pending_acks_track_several_outstanding_ids() {
@@ -306,18 +346,20 @@ int main(int, char**) {
   RUN_TEST(test_message_in_flight_at_disconnect_keeps_its_seq);
   RUN_TEST(test_two_minute_outage_skips_intervals_without_gaps_beyond_in_flight);
   RUN_TEST(test_failed_attempts_back_off_and_success_resets);
-  RUN_TEST(test_backoff_caps_at_60_s_with_jitter);
+  RUN_TEST(test_backoff_caps_at_15_s_with_jitter);
   RUN_TEST(test_waits_for_client_to_finish_disconnecting);
   RUN_TEST(test_no_reconnect_while_wifi_down);
   RUN_TEST(test_stuck_connect_is_aborted_once);
-  RUN_TEST(test_supervisor_restarts_after_10_min_without_ack);
+  RUN_TEST(test_unacked_message_drops_a_session_the_client_still_reports_connected);
+  RUN_TEST(test_any_ack_restarts_the_ack_timeout);
+  RUN_TEST(test_ack_clock_survives_reconnects_and_counts_drops);
   RUN_TEST(test_timers_survive_millis_wraparound);
   RUN_TEST(test_wifi_loss_ends_a_session_the_client_still_reports_connected);
   RUN_TEST(test_wifi_loss_while_connecting_drops_the_attempt);
   RUN_TEST(test_ack_recorded_before_id_is_known_is_kept);
   RUN_TEST(test_ack_log_ignores_unknown_and_zero_ids);
   RUN_TEST(test_ack_log_keeps_the_last_slots_and_clears);
-  RUN_TEST(test_acks_slower_than_the_interval_still_feed_the_supervisor);
+  RUN_TEST(test_acks_slower_than_the_interval_but_within_the_timeout_keep_the_session);
   RUN_TEST(test_pending_acks_track_several_outstanding_ids);
   RUN_TEST(test_pending_acks_drop_the_oldest_when_full_and_clear);
   return UNITY_END();
