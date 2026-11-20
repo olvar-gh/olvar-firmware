@@ -1,4 +1,4 @@
-# olvar-firmware — Design
+# olvar-firmware design
 
 Scope: the ESP32 firmware that reads the plant sensors and publishes them over MQTT to the Raspberry Pi 3B gateway.
 Research date: 2026-11-16. Every non-obvious claim links to its source.
@@ -303,7 +303,7 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 //              class IntervalTimer{ public: explicit IntervalTimer(uint32_t periodMs); bool due(uint32_t nowMs); };
 ```
 
-### T0 — Scaffold (first, alone)
+### T0: Scaffold (first, alone)
 **Owns:** `platformio.ini`, `secrets.example.ini`, `.gitignore`, `README.md`, `include/pins.h`, `lib/olvar_core/library.json`, `lib/olvar_core/src/reading.h`, `src/main.cpp` (stub that prints the version), `scripts/version.py`, `.github/workflows/ci.yml`, `test/native/test_smoke/`.
 **Acceptance:**
 - `pio run -e esp32dev` builds with `huge_app.csv`.
@@ -314,7 +314,7 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 
 **Verify:** run both commands locally and on CI. No hardware needed.
 
-### T1 — ADC filter, sanitiser, soil-check verdict (olvar_core)
+### T1: ADC filter, sanitiser, soil-check verdict (olvar_core)
 **Owns:** `lib/olvar_core/src/adc_filter.*`, `lib/olvar_core/src/sanitize.*`, `lib/olvar_core/src/soil_check.*`, `test/native/test_adc_filter/`, `test/native/test_sanitize/`, `test/native/test_soil_check/`.
 **Acceptance:**
 - `trimmedMean` with n=64, trim=16 gives the mean of the middle 32 and ignores outliers. n=1 and trim≥n/2 fall back to the median.
@@ -324,7 +324,7 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 
 **Verify:** `pio test -e native -f native/test_adc_filter -f native/test_sanitize -f native/test_soil_check`. No hardware.
 
-### T2 — Telemetry JSON, ids/topics, contract fixtures (olvar_core)
+### T2: Telemetry JSON, ids/topics, contract fixtures (olvar_core)
 **Owns:** `lib/olvar_core/src/telemetry.*`, `lib/olvar_core/src/ids.*`, `test/native/test_telemetry/`, `test/native/test_ids/`, `docs/contract/telemetry.schema.json`, `docs/contract/telemetry.example.json`, `tools/sim_telemetry.sh`.
 **Acceptance:**
 - The output has exactly the §4.1 keys, plus `rssi_dbm` only when `ok`. **No `soil_pct` key.**
@@ -354,7 +354,7 @@ struct Meta    { const char* device_id; const char* boot_id; uint32_t seq; uint3
 
 No hardware. The gateway reuses the fixtures and the simulator.
 
-### T3 — Settings model, CLI parser, backoff/timer (olvar_core)
+### T3: Settings model, CLI parser, backoff/timer (olvar_core)
 **Owns:** `lib/olvar_core/src/settings.*`, `lib/olvar_core/src/cli.*`, `lib/olvar_core/src/backoff.*`, `test/native/test_settings/`, `test/native/test_cli/`, `test/native/test_backoff/`.
 **Acceptance:**
 - `validate` rejects: empty host, port 0, empty password, and any device_id that fails `isValidDeviceId` (gateway rule + reserved `olvar-gateway`). The error message names the rule so the portal can show it.
@@ -364,7 +364,7 @@ No hardware. The gateway reuses the fixtures and the simulator.
 
 **Verify:** native tests. No hardware.
 
-### T4 — Sensor drivers and wiring doc
+### T4: Sensor drivers and wiring doc
 **Owns:** `src/sensors/*`, `test/embedded/test_i2c_bus/`, `test/embedded/test_sensors/`, `docs/WIRING.md`.
 **Acceptance:**
 - `I2cBus` runs Wire at 100 kHz on GPIO21/22 and provides `scan()`.
@@ -384,7 +384,7 @@ No hardware. The gateway reuses the fixtures and the simulator.
 
 **Without hardware:** compile only (`pio run -e esp32dev`).
 
-### T5 — Settings storage and provisioning
+### T5: Settings storage and provisioning
 **Owns:** `src/storage/settings_store.*`, `src/net/provisioning.*`, `docs/PROVISIONING.md`.
 **Acceptance:**
 - `SettingsStore` load/save/clear round-trips `Settings` in Preferences namespace `olvar`. Keys: `dev_id, mq_host, mq_port, mq_pass, portal`. There's no username key: the MQTT username is always `device_id`.
@@ -401,7 +401,7 @@ No hardware. The gateway reuses the fixtures and the simulator.
 
 **Without hardware:** compile only.
 
-### T6 — Wi-Fi and MQTT link
+### T6: Wi-Fi and MQTT link
 **Owns:** `src/net/wifi_link.*`, `src/net/mqtt_link.*`.
 **Acceptance:**
 - STA mode with `setAutoReconnect(true)`, hostname = device_id, and disconnect reasons logged.
@@ -428,7 +428,7 @@ No hardware. The gateway reuses the fixtures and the simulator.
 
 **Without hardware:** compile only. Optional local host test against `mosquitto` (espMqttClient builds on Linux); not in CI.
 
-### T7 — Serial CLI and status LED
+### T7: Serial CLI and status LED
 **Owns:** `src/serial_cli.*`, `src/status_led.*`.
 **Acceptance:**
 - The CLI reads lines at 115200. `portal` sets the flag and reboots. `reboot`, `help`.
@@ -444,7 +444,7 @@ No hardware. The gateway reuses the fixtures and the simulator.
 
 **Verify:** on hardware. Without hardware: compile only; parsing is already covered by T3.
 
-### T8 — Integration, bring-up, release 0.1.0 (last)
+### T8: Integration, bring-up, release 0.1.0 (last)
 **Owns:** `src/main.cpp`, `src/app.*`, `docs/BRINGUP.md`, version bump.
 **Acceptance:**
 - Implements §5.1 using T1–T7.
