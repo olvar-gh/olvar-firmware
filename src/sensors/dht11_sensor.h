@@ -25,6 +25,8 @@ class Dht11Sensor {
   uint32_t dueAtMs() const { return throttle_.dueAtMs(millis()); }
   // False until two reads have been answered: the replies before that may be unsettled.
   bool nextReplySettled() const { return throttle_.nextReplySettled(); }
+  // Raw bytes, checksum and pulse widths of the last transaction (serial `raw`, `dhtwatch`).
+  const Dht11Diag& diag() const { return diag_; }
 
  private:
   bool readFrame(uint8_t bytes[5]);
@@ -32,6 +34,7 @@ class Dht11Sensor {
   uint8_t pin_;
   Dht11Throttle throttle_;
   TempHumidity last_;
+  Dht11Diag diag_;
 };
 
 }  // namespace olvar

@@ -8,6 +8,7 @@
 #include "../../../src/serial_cli.cpp"
 
 using olvar::LineReader;
+using olvar::DhtWatch;
 using olvar::SoilCheck;
 using Phase = olvar::SoilCheck::Phase;
 
@@ -196,6 +197,56 @@ static void test_every_verdict_has_name_and_advice() {
   TEST_ASSERT_NOT_NULL(strstr(olvar::soilVerdictAdvice(SoilVerdict::Slow), "1 MOhm"));
 }
 
+static TempHumidity th(float h) {
+  TempHumidity r;
+  r.humidity_pct = {true, h};
+  r.temperature_c = {true, 25};
+  return r;
+}
+
+// dhtwatch reads whenever the DHT11 itself allows (2 s after the previous transaction) and
+// stops at the first read 30 s or more after start; a breath shows up as min/max.
+static void test_dhtwatch_paces_by_the_sensor_and_ends_after_30s() {
+  DhtWatch w;
+  TEST_ASSERT_FALSE(w.due(0, 0));
+  w.start(1000);
+  TEST_ASSERT_TRUE(w.due(1000, 1000));
+  TEST_ASSERT_FALSE(w.due(1000, 1500));
+  uint32_t t = 1000;
+  float h[] = {5, 6, 5, 22, 41, 30, 18, 11, 8, 7, 6, 6, 5, 5, 5, 6};
+  int lines = 0;
+  while (w.active()) {
+    TEST_ASSERT_TRUE(lines < 16);
+    TEST_ASSERT_EQUAL_UINT32(t - 1000, w.add(t, th(h[lines])));
+    ++lines;
+    t += 2025;  // ~25 ms transaction + 2 s pause
+  }
+  TEST_ASSERT_EQUAL_INT(16, lines);  // 0, 2.0, ..., 30.4 s
+  TEST_ASSERT_EQUAL_UINT8(16, w.reads());
+  TEST_ASSERT_EQUAL_UINT8(0, w.failed());
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 5, w.humidityMin().v);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 41, w.humidityMax().v);
+  TEST_ASSERT_FALSE(w.due(t, 0));
+}
+
+static void test_dhtwatch_counts_failures_and_restarts_clean() {
+  DhtWatch w;
+  w.start(0);
+  w.add(0, TempHumidity{});
+  w.add(2000, th(40));
+  TEST_ASSERT_EQUAL_UINT8(2, w.reads());
+  TEST_ASSERT_EQUAL_UINT8(1, w.failed());
+  w.abort();
+  TEST_ASSERT_FALSE(w.active());
+  TEST_ASSERT_EQUAL_UINT32(0, w.add(4000, th(50)));  // ignored once stopped
+  TEST_ASSERT_EQUAL_UINT8(2, w.reads());
+  w.start(10000);
+  TEST_ASSERT_EQUAL_UINT8(0, w.reads());
+  TEST_ASSERT_FALSE(w.humidityMin().ok);
+  w.add(10000, TempHumidity{});
+  TEST_ASSERT_FALSE(w.humidityMax().ok);  // no successful read yet
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_line_reader_line_endings);
@@ -210,5 +261,7 @@ int main() {
   RUN_TEST(test_soilcheck_failed_reads);
   RUN_TEST(test_soilcheck_abort_and_enter_outside_wait);
   RUN_TEST(test_every_verdict_has_name_and_advice);
+  RUN_TEST(test_dhtwatch_paces_by_the_sensor_and_ends_after_30s);
+  RUN_TEST(test_dhtwatch_counts_failures_and_restarts_clean);
   return UNITY_END();
 }

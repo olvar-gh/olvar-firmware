@@ -82,6 +82,26 @@ SoilWindow SoilCheck::finishPhase() const {
   return w;
 }
 
+void DhtWatch::start(uint32_t nowMs) {
+  *this = DhtWatch();
+  active_ = true;
+  startMs_ = nowMs;
+}
+
+uint32_t DhtWatch::add(uint32_t nowMs, const TempHumidity& r) {
+  if (!active_) return 0;
+  uint32_t elapsed = nowMs - startMs_;
+  if (reads_ < UINT8_MAX) ++reads_;
+  if (r.humidity_pct.ok) {
+    if (!hMin_.ok || r.humidity_pct.v < hMin_.v) hMin_ = r.humidity_pct;
+    if (!hMax_.ok || r.humidity_pct.v > hMax_.v) hMax_ = r.humidity_pct;
+  } else if (failed_ < UINT8_MAX) {
+    ++failed_;
+  }
+  if (elapsed >= kDurationMs) active_ = false;
+  return elapsed;
+}
+
 const char* soilVerdictName(SoilVerdict v) {
   switch (v) {
     case SoilVerdict::Ok: return "OK";
@@ -171,11 +191,14 @@ void SerialCli::poll() {
       io_.printf("Line too long (max %u chars), ignored.\n", static_cast<unsigned>(LineReader::kMaxLen));
     } else if (check_.active()) {
       handleSoilCheckLine(reader_.line());
+    } else if (watch_.active()) {
+      handleDhtWatchLine(reader_.line());
     } else {
       handleLine(reader_.line());
     }
   }
   if (check_.sampleDue(millis())) stepSoilCheck();
+  if (watch_.due(millis(), climate_.dhtDueAtMs())) stepDhtWatch();
 }
 
 void SerialCli::handleLine(const char* line) {
@@ -183,6 +206,7 @@ void SerialCli::handleLine(const char* line) {
     case Cmd::Status: printStatus(); break;
     case Cmd::Raw: printRaw(); break;
     case Cmd::SoilCheck: startSoilCheck(); break;
+    case Cmd::DhtWatch: startDhtWatch(); break;
     case Cmd::Portal:
       if (!hooks_.requestPortal) {
         io_.println("Portal is not available in this build.");
@@ -207,7 +231,9 @@ void SerialCli::printHelp() {
   io_.println("Commands:");
   io_.println("  status     network, MQTT, ids, seq, skipped, temp/humidity sensor, free heap");
   io_.println("  raw        one fresh soil_raw + SHT31/DHT11 + BH1750 reading (wiring check)");
+  io_.println("             with a DHT11 also its raw bytes, checksum and bit pulse widths");
   io_.println("  soilcheck  guided air/water soil sensor check (~2 min, nothing is saved)");
+  io_.println("  dhtwatch   DHT11 read every 2 s for 30 s, for a breath test (nothing is saved)");
   io_.println("  portal     reopen the Wi-Fi/MQTT setup portal (reboots)");
   io_.println("  reboot     restart the board");
   io_.println("  help       this list");
@@ -245,6 +271,55 @@ void SerialCli::printRaw() {
   printOptF(io_, "humidity_pct", th.humidity_pct, 2);
   printOptF(io_, "lux", lux, 1);
   io_.printf(" (temp/humidity: %s)\n", climate_.name());
+  // Also while no sensor is found: the DHT11's failed reply says why.
+  if (climate_.kind() != ClimateSensor::Kind::Sht31) printDhtDiag();
+}
+
+void SerialCli::printDhtDiag() {
+  const Dht11Diag& d = climate_.dhtDiag();
+  if (!d.read) {
+    io_.println("dht11 not read yet");
+    return;
+  }
+  char buf[kDiagLen];
+  formatDht11Diag(d, buf, sizeof(buf));
+  io_.printf("dht11 %s age_ms=%lu\n", buf, static_cast<unsigned long>(millis() - d.atMs));
+}
+
+void SerialCli::startDhtWatch() {
+  if (climate_.kind() == ClimateSensor::Kind::Sht31) {
+    io_.printf("dhtwatch: %s is in use, there is no DHT11 to watch.\n", climate_.name());
+    return;
+  }
+  watch_.start(millis());
+  io_.println("DHT11 watch: one read every 2 s for 30 s (nothing is saved or sent). Type 'q' + Enter to abort.");
+  io_.println("After a few lines, breathe on the grille from ~5 cm for 2-3 s, then leave it alone.");
+}
+
+void SerialCli::handleDhtWatchLine(const char* line) {
+  if (isAbort(line)) {
+    watch_.abort();
+    io_.println("dhtwatch aborted.");
+    return;
+  }
+  io_.println("dhtwatch is running; type 'q' + Enter to abort.");
+}
+
+void SerialCli::stepDhtWatch() {
+  TempHumidity r = climate_.read();
+  uint32_t elapsed = watch_.add(millis(), r);
+  char buf[kDiagLen];
+  formatDht11Diag(climate_.dhtDiag(), buf, sizeof(buf));
+  io_.printf("  %2lu s ", static_cast<unsigned long>(elapsed / 1000));
+  printOptF(io_, "humidity_pct", r.humidity_pct, 1);
+  printOptF(io_, "temperature_c", r.temperature_c, 1);
+  io_.printf(" %s\n", buf);
+  if (watch_.active()) return;
+  io_.printf("dhtwatch done: %u reads, %u failed", unsigned(watch_.reads()), unsigned(watch_.failed()));
+  if (watch_.humidityMin().ok) {
+    io_.printf(", humidity_pct min %.1f max %.1f", watch_.humidityMin().v, watch_.humidityMax().v);
+  }
+  io_.println(".");
 }
 
 void SerialCli::startSoilCheck() {

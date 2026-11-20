@@ -83,6 +83,36 @@ void test_raw_prints_all_fields() {
   contains("humidity_pct=");
   contains("lux=");
   contains("(temp/humidity: ");
+  // With a DHT11, or no sensor at all, a second line shows the DHT11's last transaction.
+  if (climate.kind() != ClimateSensor::Kind::Sht31) {
+    contains("dht11 ");
+    contains("start_us=");
+    contains("age_ms=");
+  }
+}
+
+void test_dhtwatch_streams_and_aborts() {
+  run("dhtwatch\n");
+  if (climate.kind() == ClimateSensor::Kind::Sht31) {
+    contains("no DHT11 to watch");
+    TEST_ASSERT_FALSE(shell.dhtWatchActive());
+    return;
+  }
+  contains("DHT11 watch");
+  TEST_ASSERT_TRUE(shell.dhtWatchActive());
+  uint32_t t0 = millis();
+  uint32_t lines = 0;
+  while (millis() - t0 < 4500) {
+    run("");
+    if (io.out.indexOf("humidity_pct=") >= 0) ++lines;
+    delay(10);
+  }
+  TEST_ASSERT_UINT32_WITHIN(1, 2, lines);  // every 2 s
+  run("raw\n");
+  contains("dhtwatch is running");
+  run("q\n");
+  contains("aborted");
+  TEST_ASSERT_FALSE(shell.dhtWatchActive());
 }
 
 void test_portal_and_reboot_use_hooks() {
@@ -146,6 +176,7 @@ void setup() {
   RUN_TEST(test_raw_prints_all_fields);
   RUN_TEST(test_portal_and_reboot_use_hooks);
   RUN_TEST(test_soilcheck_streams_without_blocking);
+  RUN_TEST(test_dhtwatch_streams_and_aborts);
   RUN_TEST(test_led_drives_pin);
   UNITY_END();
 }

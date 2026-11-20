@@ -12,6 +12,7 @@ static void test_known_commands() {
   ASSERT_CMD(Cmd::Status, "status");
   ASSERT_CMD(Cmd::Raw, "raw");
   ASSERT_CMD(Cmd::SoilCheck, "soilcheck");
+  ASSERT_CMD(Cmd::DhtWatch, "dhtwatch");
   ASSERT_CMD(Cmd::Portal, "portal");
   ASSERT_CMD(Cmd::Reboot, "reboot");
   ASSERT_CMD(Cmd::Help, "help");
@@ -21,6 +22,7 @@ static void test_case_insensitive() {
   ASSERT_CMD(Cmd::Status, "STATUS");
   ASSERT_CMD(Cmd::SoilCheck, "SoilCheck");
   ASSERT_CMD(Cmd::Reboot, "rEbOoT");
+  ASSERT_CMD(Cmd::DhtWatch, "DhtWatch");
 }
 
 static void test_trims_whitespace() {
@@ -38,6 +40,7 @@ static void test_unknown_input() {
   ASSERT_CMD(Cmd::Unknown, "statuss");
   ASSERT_CMD(Cmd::Unknown, "status now");
   ASSERT_CMD(Cmd::Unknown, "soil check");
+  ASSERT_CMD(Cmd::Unknown, "dht watch");
   ASSERT_CMD(Cmd::Unknown, "cal");
   ASSERT_CMD(Cmd::Unknown, "r");
 }

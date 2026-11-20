@@ -1,5 +1,7 @@
 #include "dht11.h"
 
+#include <stdio.h>
+
 namespace olvar {
 
 namespace {
@@ -19,6 +21,59 @@ void dht11PulsesToBytes(const uint16_t highUs[kDht11Bits], uint8_t bytes[5]) {
     bytes[i / 8] = static_cast<uint8_t>(bytes[i / 8] << 1);
     if (highUs[i] >= kDht11OneMinUs) bytes[i / 8] |= 1;
   }
+}
+
+Dht11Diag dht11Diagnose(const Dht11Pulses& p) {
+  Dht11Diag d;
+  d.stage = p.stage;
+  d.bits = p.bits;
+  for (size_t i = 0; i < p.bits && i < kDht11Bits; ++i) {
+    uint16_t w = p.highUs[i];
+    if (w >= kDht11OneMinUs) {
+      if (d.ones == 0 || w < d.oneMinUs) d.oneMinUs = w;
+      if (d.ones == 0 || w > d.oneMaxUs) d.oneMaxUs = w;
+      ++d.ones;
+    } else {
+      if (d.zeros == 0 || w < d.zeroMinUs) d.zeroMinUs = w;
+      if (d.zeros == 0 || w > d.zeroMaxUs) d.zeroMaxUs = w;
+      ++d.zeros;
+    }
+  }
+  if (p.stage == Dht11Stage::Done) {
+    dht11PulsesToBytes(p.highUs, d.bytes);
+    d.checksumOk = static_cast<uint8_t>(d.bytes[0] + d.bytes[1] + d.bytes[2] + d.bytes[3]) == d.bytes[4];
+  }
+  return d;
+}
+
+size_t formatDht11Diag(const Dht11Diag& d, char* out, size_t cap) {
+  if (out == nullptr || cap == 0) return 0;
+  out[0] = '\0';
+  char bit0[16] = "none", bit1[16] = "none";
+  if (d.zeros) snprintf(bit0, sizeof(bit0), "%u..%u", unsigned(d.zeroMinUs), unsigned(d.zeroMaxUs));
+  if (d.ones) snprintf(bit1, sizeof(bit1), "%u..%u", unsigned(d.oneMinUs), unsigned(d.oneMaxUs));
+  int n;
+  if (d.stage == Dht11Stage::Done) {
+    n = snprintf(out, cap, "bytes=%02X %02X %02X %02X %02X checksum=%s bit0_us=%s bit1_us=%s start_us=%lu",
+                 d.bytes[0], d.bytes[1], d.bytes[2], d.bytes[3], d.bytes[4], d.checksumOk ? "ok" : "bad",
+                 bit0, bit1, static_cast<unsigned long>(d.startLowUs));
+  } else {
+    const char* error = "";
+    switch (d.stage) {
+      case Dht11Stage::Release: error = "line_low"; break;
+      case Dht11Stage::NoResponse: error = "no_response"; break;
+      case Dht11Stage::Response: error = "response_cut"; break;
+      case Dht11Stage::Data: error = "bit_timeout"; break;
+      case Dht11Stage::Done: break;
+    }
+    n = snprintf(out, cap, "error=%s bits=%u bit0_us=%s bit1_us=%s start_us=%lu", error,
+                 unsigned(d.bits), bit0, bit1, static_cast<unsigned long>(d.startLowUs));
+  }
+  if (n < 0 || static_cast<size_t>(n) >= cap) {
+    out[0] = '\0';
+    return 0;
+  }
+  return static_cast<size_t>(n);
 }
 
 TempHumidity dht11Decode(const uint8_t bytes[5]) {

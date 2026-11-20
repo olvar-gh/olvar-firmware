@@ -1,5 +1,5 @@
-// Serial CLI (PLAN T7): status, raw, soilcheck, portal, reboot, help.
-// LineReader and SoilCheck are pure so native tests can cover them; SerialCli is the
+// Serial CLI (PLAN T7): status, raw, soilcheck, dhtwatch, portal, reboot, help.
+// LineReader, SoilCheck and DhtWatch are pure so native tests can cover them; SerialCli is the
 // Arduino side and is non-blocking apart from the sensor reads a command asks for.
 #pragma once
 
@@ -84,6 +84,35 @@ class SoilCheck {
   SoilWindow water_ = {};
 };
 
+// `dhtwatch`: one DHT11 read every 2 s for 30 s, for a breath test. Diagnostic only.
+class DhtWatch {
+ public:
+  static constexpr uint32_t kDurationMs = 30000;
+
+  void start(uint32_t nowMs);
+  void abort() { active_ = false; }
+  bool active() const { return active_; }
+  // sensorDueAtMs: Dht11Sensor::dueAtMs(), so every read is a real transaction (2 s apart).
+  bool due(uint32_t nowMs, uint32_t sensorDueAtMs) const {
+    return active_ && static_cast<int32_t>(nowMs - sensorDueAtMs) >= 0;
+  }
+  // Records one read and returns its ms since start(); ends the watch after kDurationMs.
+  uint32_t add(uint32_t nowMs, const TempHumidity& r);
+
+  uint8_t reads() const { return reads_; }
+  uint8_t failed() const { return failed_; }
+  // Lowest and highest humidity_pct seen; ok=false when no read succeeded.
+  OptF humidityMin() const { return hMin_; }
+  OptF humidityMax() const { return hMax_; }
+
+ private:
+  bool active_ = false;
+  uint32_t startMs_ = 0;
+  uint8_t reads_ = 0;
+  uint8_t failed_ = 0;
+  OptF hMin_, hMax_;
+};
+
 const char* soilVerdictName(SoilVerdict v);
 const char* soilVerdictAdvice(SoilVerdict v);
 
@@ -120,6 +149,7 @@ class SerialCli {
  public:
   static constexpr uint32_t kBaud = 115200;
   static constexpr int kMaxBytesPerPoll = 128;
+  static constexpr size_t kDiagLen = 128;  // formatDht11Diag() output
 
   SerialCli(Stream& io, ClimateSensor& climate, Bh1750Sensor& bh, SoilSensor& soil, CliHooks hooks);
 
@@ -128,6 +158,7 @@ class SerialCli {
   // Call every loop(). Runs at most one command and one soilcheck sample (~65 ms) per call.
   void poll();
   bool soilCheckActive() const { return check_.active(); }
+  bool dhtWatchActive() const { return watch_.active(); }
 
  private:
   void handleLine(const char* line);
@@ -135,6 +166,10 @@ class SerialCli {
   void printHelp();
   void printStatus();
   void printRaw();
+  void printDhtDiag();
+  void startDhtWatch();
+  void handleDhtWatchLine(const char* line);
+  void stepDhtWatch();
   void startSoilCheck();
   void stepSoilCheck();
   void printSoilResult();
@@ -147,6 +182,7 @@ class SerialCli {
   CliHooks hooks_;
   LineReader reader_;
   SoilCheck check_;
+  DhtWatch watch_;
 };
 
 }  // namespace olvar
