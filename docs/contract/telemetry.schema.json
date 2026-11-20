@@ -32,11 +32,11 @@
       "maximum": 4294967295
     },
     "temperature_c": {
-      "description": "SHT31, 2 dp; null on read/CRC failure.",
+      "description": "From the sensor named by climate_sensor, 2 dp; null on read/CRC failure.",
       "type": ["number", "null"]
     },
     "humidity_pct": {
-      "description": "SHT31, 2 dp; null on read/CRC failure.",
+      "description": "From the sensor named by climate_sensor, 2 dp; null on read/CRC failure.",
       "type": ["number", "null"]
     },
     "lux": {
@@ -48,6 +48,11 @@
       "type": ["integer", "null"],
       "minimum": 0,
       "maximum": 4095
+    },
+    "climate_sensor": {
+      "description": "The temperature/humidity sensor the firmware is reading: sht31 (I2C 0x44/0x45) or dht11 (GPIO4). Optional: omitted (never null) while no climate sensor has been detected. Consumers must treat unknown values as absent, never reject the message for them.",
+      "type": "string",
+      "enum": ["sht31", "dht11"]
     },
     "rssi_dbm": {
       "description": "Wi-Fi RSSI. Optional: omitted (never null) when not connected.",

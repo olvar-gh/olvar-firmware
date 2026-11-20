@@ -89,7 +89,8 @@ window up at plant level, uncovered. Keep I2C wires ≤ 30 cm.
 
 If you have no working SHT31, a **DHT11** can measure temperature and humidity instead. The
 firmware looks for an SHT31 at boot (address 0x44, then 0x45). If neither answers it uses the
-DHT11 on **GPIO4**. The telemetry is the same; the DHT11 is just coarser (whole degrees and whole
+DHT11 on **GPIO4**. The telemetry has the same fields (only `climate_sensor` says `dht11` instead
+of `sht31`); the DHT11 is just coarser (whole degrees and whole
 percent, ±2 °C, ±5 %RH). The ASAIR datasheet (2022-12) gives a reporting range of −20–60 °C and
 5–95 %RH, accurate in 8–85 %RH; older Aosong sheets said 0–50 °C and 20–90 %RH. A DHT11 stuck
 near 5 %RH in a normal room is at the bottom of its range: see

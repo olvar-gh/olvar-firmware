@@ -164,9 +164,11 @@ mosquitto_sub -h 192.168.1.20 -u <admin-user> -P '<admin-password>' -v -q 1 -t '
 - [ ] Right away: `olvar/v1/olvar-a1b2c3/status online` (it is retained, so it shows at once).
 - [ ] Every 60 s: a telemetry line like
   ```
-  olvar/v1/olvar-a1b2c3/telemetry {"device_id":"olvar-a1b2c3","boot_id":"9f3c07ab","seq":42,"uptime_ms":2520311,"temperature_c":23.41,"humidity_pct":51.07,"lux":312.5,"soil_raw":2210,"rssi_dbm":-61,"fw":"0.1.0+a1b2c3d"}
+  olvar/v1/olvar-a1b2c3/telemetry {"device_id":"olvar-a1b2c3","boot_id":"9f3c07ab","seq":42,"uptime_ms":2520311,"temperature_c":23.41,"humidity_pct":51.07,"lux":312.5,"soil_raw":2210,"climate_sensor":"sht31","rssi_dbm":-61,"fw":"0.1.0+a1b2c3d"}
   ```
 - [ ] `boot_id` stays the same and `seq` goes up by one each minute.
+- [ ] `climate_sensor` names the sensor from step 5: `"sht31"` or `"dht11"`. It is missing only
+      while the board has found neither; the dashboard then shows a neutral "Climate sensor" line.
 - [ ] Unplug the board's USB: within about 25 s (1.5 × the 15 s keepalive) the status changes to
       `offline`.
 

@@ -13,9 +13,13 @@ struct TempHumidity {
   OptF temperature_c, humidity_pct;
 };
 
+// Which temperature/humidity sensor the firmware is reading (telemetry "climate_sensor").
+enum class ClimateKind : uint8_t { None, Sht31, Dht11 };
+
 struct Reading {
   OptF temperature_c, humidity_pct, lux;
   OptI soil_raw;
+  ClimateKind climate_sensor = ClimateKind::None;
 };
 
 struct Meta {

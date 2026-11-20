@@ -97,12 +97,8 @@ Research date: 2026-11-16. Every non-obvious claim links to its source.
 | Tests live in `test/test_*` folders. `test_filter`/`test_ignore` split them per environment. Code under test should be in `lib/`. | http://docs.platformio.org/en/latest/advanced/unit-testing/structure/hierarchy.html , https://xa1.at/platformio-unit-test |
 | Unity is the default framework and runs both native and embedded. | http://docs.platformio.org/en/latest/advanced/unit-testing/frameworks/unity.html |
 
-### 2.7 Outside firmware (checked because the contract mentions it)
-| Finding | Source |
-|---|---|
-| `deepseek-flash` is a real DeepSeek API model id (currently DeepSeek-V4.1-Flash-1017; thinking can be switched off; JSON Output supported). `deepseek-chat`/`deepseek-reasoner` were retired 2026-07-24. Price per 1M tokens, off-peak: $0.15 input (cache miss), $0.60 output; peak hours cost double. | https://api-docs.deepseek.com/quick_start/pricing , https://api-docs.deepseek.com/updates |
-
-The chat Edge Function belongs to olvar-gateway and has no firmware impact.
+### 2.7 Outside firmware
+The plant chat (a Claude-backed Supabase Edge Function), the database and the dashboard belong to olvar-gateway and olvar-dashboard and have no firmware impact.
 
 ---
 
@@ -145,7 +141,7 @@ The **final contract** replaces the provisional one. Below is the firmware-facin
   ```json
   {"device_id":"olvar-a1b2c3","boot_id":"9f3c07ab","seq":42,"uptime_ms":2520311,
    "temperature_c":23.41,"humidity_pct":51.07,"lux":312.5,"soil_raw":2210,
-   "rssi_dbm":-61,"fw":"0.1.0+a1b2c3d"}
+   "climate_sensor":"sht31","rssi_dbm":-61,"fw":"0.1.0+a1b2c3d"}
   ```
   | Field | Type | Firmware rule |
   |---|---|---|
@@ -156,6 +152,7 @@ The **final contract** replaces the provisional one. Below is the firmware-facin
   | `temperature_c`, `humidity_pct` | number \| null | 2 dp; `null` on read/CRC failure |
   | `lux` | number \| null | 1 dp; `null` on failure |
   | `soil_raw` | int \| null | 12-bit ADC count (0–4095) at 11 dB, trimmed mean of 64 samples; **higher = drier**; `null` if the sampling fails |
+  | `climate_sensor` | string | optional; `sht31` or `dht11`, the temperature/humidity sensor in use. Omitted (never `null`) while none has been detected; still sent when a read fails (the values are then `null`). Consumers treat unknown values as absent. |
   | `rssi_dbm` | int | optional; omitted when not connected |
   | `fw` | string | SemVer + git short hash, e.g. `0.1.0+a1b2c3d` |
 - **NaN or Inf is never sent.** Any non-finite float is serialised as `null`. **No `soil_pct` is sent.**
@@ -174,6 +171,7 @@ The **final contract** replaces the provisional one. Below is the firmware-facin
 | Dedup key | first draft: `(device_id, seq, uptime_ms)` | `(device_id, boot_id, seq)` |
 | Interval | configurable 10–3600 s | **fixed 60 s** |
 | OTA | optional ArduinoOTA | **removed**; USB only |
+| `climate_sensor` | absent | **added** (0.1.0), optional `sht31`/`dht11`; old gateways ignore it as an unknown field |
 | `device_id` rule | first draft: `[a-z0-9-]{1,32}` | gateway rule `^[a-z0-9][a-z0-9-]{2,31}$`, `olvar-gateway` reserved; MQTT username = device_id |
 
 ---
@@ -185,7 +183,7 @@ The **final contract** replaces the provisional one. Below is the firmware-facin
 boot ─► make boot_id ─► load Settings (NVS) ─► if no Wi-Fi creds OR portal flag ─► WiFiManager portal ─► save ─► restart
      └► Wi-Fi STA (autoReconnect, event log) ─► MQTT (espMqttClient, LWT) ─► publish status "online" (retained)
 loop:  serial CLI poll │ BOOT long-press check │ every 60 s:
-         read SHT31 ─► read BH1750 ─► sample soil ─► build Reading (nullable fields)
+         read SHT31 or DHT11 ─► read BH1750 ─► sample soil ─► build Reading (nullable fields)
          ─► if MQTT connected: publish telemetry (QoS 1), seq++ ; else: drop, count skipped
        on MQTT disconnect: discard unacked telemetry; reconnect with backoff (1 s → 15 s, ±20 % jitter)
        recovery ladder (BRINGUP §11): PUBACK missing 30 s → new MQTT session; no ack 100 s → Wi-Fi reconnect; 10 min → publish "offline" (if possible) → restart
@@ -197,6 +195,7 @@ loop:  serial CLI poll │ BOOT long-press check │ every 60 s:
 - `src/`: thin Arduino adapters (drivers, Wi-Fi, MQTT, NVS, LED, serial) and `main.cpp`.
 
 ### 5.3 Folder layout (target)
+The original target. The repo has since gained the DHT11 driver, `ClimateSensor`, link recovery and the link record; `git ls-files` is the current list.
 ```
 olvar-firmware/
 ├── platformio.ini              # envs: esp32dev (firmware), native (host tests); extra_configs = secrets.ini
@@ -242,6 +241,7 @@ olvar-firmware/
 ```
 
 ### 5.4 `platformio.ini` sketch (for T0; versions pinned)
+The sketch T0 started from; the committed `platformio.ini` is authoritative (the version now comes from `custom_fw_version` and `scripts/version.py`, dev defaults from `secrets.defaults.ini`).
 ```ini
 [platformio]
 default_envs = esp32dev
@@ -543,7 +543,7 @@ After a passing check, protect the sensor: coat the cut PCB edges along the blad
 ### 7.5 First boot and provisioning
 1. `pio run -t upload && pio device monitor`. The serial monitor prints the device id and the setup AP password.
 2. On your phone, join **`olvar-setup-xxxxxx`**. The portal opens (if not, browse to 192.168.4.1).
-3. Choose your home 2.4 GHz network and enter its password. Enter the MQTT host (the Pi's IP), port 1883, and the MQTT user and password from §7.2. Save.
+3. Choose your home 2.4 GHz network and enter its password. Enter the MQTT host (the Pi's IP), port 1883, and the MQTT password from §7.2 (the username is the device id). Save.
 4. On the Pi, `mosquitto_sub -h localhost -u <admin> -P <pw> -v -t 'olvar/v1/#'` should show `online` and then telemetry every 60 s.
 5. To change settings later: while the board is running, hold **BOOT** for 3 s, then release. It reboots into the portal. Don't hold BOOT while pressing EN/RST: that enters flashing mode.
 

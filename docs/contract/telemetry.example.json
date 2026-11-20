@@ -1,1 +1,1 @@
-{"device_id":"olvar-a1b2c3","boot_id":"9f3c07ab","seq":42,"uptime_ms":2520311,"temperature_c":23.41,"humidity_pct":51.07,"lux":312.5,"soil_raw":2210,"rssi_dbm":-61,"fw":"0.1.0+a1b2c3d"}
+{"device_id":"olvar-a1b2c3","boot_id":"9f3c07ab","seq":42,"uptime_ms":2520311,"temperature_c":23.41,"humidity_pct":51.07,"lux":312.5,"soil_raw":2210,"climate_sensor":"sht31","rssi_dbm":-61,"fw":"0.1.0+a1b2c3d"}

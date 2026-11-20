@@ -37,6 +37,15 @@ void setFloat(JsonDocument& doc, const char* key, const OptF& f, int decimals, c
 
 }  // namespace
 
+const char* climateSensorId(ClimateKind k) {
+  switch (k) {
+    case ClimateKind::Sht31: return "sht31";
+    case ClimateKind::Dht11: return "dht11";
+    case ClimateKind::None: break;
+  }
+  return nullptr;
+}
+
 size_t buildTelemetryJson(const Reading& r, const Meta& m, char* out, size_t cap) {
   if (out == nullptr || cap == 0) return 0;
   out[0] = '\0';
@@ -56,6 +65,7 @@ size_t buildTelemetryJson(const Reading& r, const Meta& m, char* out, size_t cap
   } else {
     doc["soil_raw"] = nullptr;
   }
+  if (const char* climate = climateSensorId(r.climate_sensor)) doc["climate_sensor"] = climate;
   if (m.rssi_dbm.ok) doc["rssi_dbm"] = m.rssi_dbm.v;
   doc["fw"] = m.fw;
 
