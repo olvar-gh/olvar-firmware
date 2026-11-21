@@ -5,11 +5,13 @@
 #
 # Usage:
 #   HOST=… DEVICE=… PASS=… [PORT=1883] [INTERVAL=60] [REBOOT_EVERY=0] [NULL_EVERY=0] [COUNT=0] \
+#     [CLIMATE=sht31] \
 #     tools/sim_telemetry.sh
 #
 #   REBOOT_EVERY=n  every n messages: new boot_id, seq and uptime_ms restart at 0
 #   NULL_EVERY=n    every nth message has temperature_c = null (sensor read failure)
 #   COUNT=n         stop after n messages (0 = run until Ctrl-C)
+#   CLIMATE=name    climate_sensor value: sht31 (default), dht11, or none to omit the field
 #
 # Needs mosquitto_pub (brew install mosquitto / apt install mosquitto-clients) and openssl.
 # Note: PASS is passed to mosquitto_pub on its command line, so other local users can see it in ps.
@@ -24,6 +26,15 @@ REBOOT_EVERY="${REBOOT_EVERY:-0}"
 NULL_EVERY="${NULL_EVERY:-0}"
 COUNT="${COUNT:-0}"
 FW="${FW:-0.1.0+sim0000}"
+CLIMATE="${CLIMATE:-sht31}"
+case "$CLIMATE" in
+  sht31 | dht11) climate_json=",\"climate_sensor\":\"$CLIMATE\"" ;;
+  none) climate_json="" ;;
+  *)
+    echo "CLIMATE must be sht31, dht11 or none" >&2
+    exit 2
+    ;;
+esac
 
 if ! [[ "$DEVICE" =~ ^[a-z0-9][a-z0-9-]{2,31}$ ]] || [[ "$DEVICE" == "olvar-gateway" ]]; then
   echo "DEVICE must match ^[a-z0-9][a-z0-9-]{2,31}\$ and not be olvar-gateway" >&2
@@ -87,13 +98,13 @@ while :; do
   uptime_ms=$(((SECONDS - boot_started) * 1000))
 
   temp_json="$(centi "$temp")"
-  if ((NULL_EVERY > 0 && (sent + 1) % NULL_EVERY == 0)); then
+  if ((NULL_EVERY > 0)) && (((sent + 1) % NULL_EVERY == 0)); then
     temp_json=null
   fi
   lux_tenths=$(((lux + 5) / 10))
-  payload=$(printf '{"device_id":"%s","boot_id":"%s","seq":%d,"uptime_ms":%d,"temperature_c":%s,"humidity_pct":%s,"lux":%d.%d,"soil_raw":%d,"rssi_dbm":%d,"fw":"%s"}' \
+  payload=$(printf '{"device_id":"%s","boot_id":"%s","seq":%d,"uptime_ms":%d,"temperature_c":%s,"humidity_pct":%s,"lux":%d.%d,"soil_raw":%d%s,"rssi_dbm":%d,"fw":"%s"}' \
     "$DEVICE" "$boot_id" "$seq" "$uptime_ms" "$temp_json" "$(centi "$hum")" \
-    $((lux_tenths / 10)) $((lux_tenths % 10)) "$soil" "$rssi" "$FW")
+    $((lux_tenths / 10)) $((lux_tenths % 10)) "$soil" "$climate_json" "$rssi" "$FW")
 
   pub "$TELEMETRY_TOPIC" "$payload"
   echo "$payload"

@@ -21,6 +21,7 @@ Reading exampleReading() {
   r.humidity_pct = {true, 51.07f};
   r.lux = {true, 312.5f};
   r.soil_raw = {true, 2210};
+  r.climate_sensor = ClimateKind::Sht31;
   return r;
 }
 
@@ -64,8 +65,9 @@ std::string readExampleFixture() {
   return s;
 }
 
-const char* const kKeys[] = {"device_id", "boot_id",  "seq",      "uptime_ms", "temperature_c",
-                             "humidity_pct", "lux",   "soil_raw", "rssi_dbm",  "fw"};
+const char* const kKeys[] = {"device_id",    "boot_id", "seq",      "uptime_ms",      "temperature_c",
+                             "humidity_pct", "lux",     "soil_raw", "climate_sensor", "rssi_dbm",
+                             "fw"};
 
 }  // namespace
 
@@ -85,7 +87,7 @@ static void test_exact_key_set_and_no_soil_pct() {
   JsonDocument doc;
   parse(build(exampleReading(), exampleMeta()), doc);
   JsonObject obj = doc.as<JsonObject>();
-  TEST_ASSERT_EQUAL(10, obj.size());
+  TEST_ASSERT_EQUAL(11, obj.size());
   for (const char* k : kKeys) TEST_ASSERT_TRUE_MESSAGE(obj[k].is<JsonVariantConst>(), k);
   for (JsonPair kv : obj) {
     bool known = false;
@@ -102,7 +104,41 @@ static void test_rssi_omitted_when_not_ok() {
   TEST_ASSERT_NULL(strstr(json.c_str(), "rssi_dbm"));
   JsonDocument doc;
   parse(json, doc);
-  TEST_ASSERT_EQUAL(9, doc.as<JsonObject>().size());
+  TEST_ASSERT_EQUAL(10, doc.as<JsonObject>().size());
+}
+
+static void test_climate_sensor_names() {
+  Reading r = exampleReading();
+  r.climate_sensor = ClimateKind::Dht11;
+  std::string json = build(r, exampleMeta());
+  TEST_ASSERT_NOT_NULL_MESSAGE(strstr(json.c_str(), "\"soil_raw\":2210,\"climate_sensor\":\"dht11\","), json.c_str());
+  r.climate_sensor = ClimateKind::Sht31;
+  json = build(r, exampleMeta());
+  TEST_ASSERT_NOT_NULL_MESSAGE(strstr(json.c_str(), "\"climate_sensor\":\"sht31\","), json.c_str());
+  TEST_ASSERT_EQUAL_STRING("sht31", climateSensorId(ClimateKind::Sht31));
+  TEST_ASSERT_EQUAL_STRING("dht11", climateSensorId(ClimateKind::Dht11));
+  TEST_ASSERT_NULL(climateSensorId(ClimateKind::None));
+}
+
+static void test_climate_sensor_omitted_when_none_found() {
+  Reading r = exampleReading();
+  r.climate_sensor = ClimateKind::None;
+  std::string json = build(r, exampleMeta());
+  // Omitted, never null, so an old gateway sees exactly the pre-climate_sensor payload.
+  TEST_ASSERT_NULL(strstr(json.c_str(), "climate_sensor"));
+  JsonDocument doc;
+  parse(json, doc);
+  TEST_ASSERT_EQUAL(10, doc.as<JsonObject>().size());
+}
+
+static void test_climate_sensor_kept_when_reading_fails() {
+  // The sensor is known but this read failed: values null, the sensor still named.
+  Reading r;
+  r.climate_sensor = ClimateKind::Dht11;
+  JsonDocument doc;
+  parse(build(r, exampleMeta()), doc);
+  TEST_ASSERT_TRUE(doc["temperature_c"].isNull());
+  TEST_ASSERT_EQUAL_STRING("dht11", doc["climate_sensor"].as<const char*>());
 }
 
 static void test_failed_fields_are_null() {
@@ -176,6 +212,24 @@ static void test_integer_fields_full_range() {
   TEST_ASSERT_NOT_NULL_MESSAGE(strstr(json.c_str(), "\"rssi_dbm\":-127,"), json.c_str());
 }
 
+static void test_longest_realistic_payload_fits_mqtt_buffer() {
+  Meta m = exampleMeta();
+  m.device_id = "olvar-0123456789abcdef0123456789";  // 32 chars, the longest valid id
+  m.seq = 4294967295u;
+  m.uptime_ms = 4294967295u;
+  m.rssi_dbm = {true, -127};
+  m.fw = "0.1.0-rc.10+a1b2c3d";
+  Reading r = exampleReading();
+  r.temperature_c = {true, -40.01f};
+  r.humidity_pct = {true, 100.0f};
+  r.lux = {true, 65535.9f};
+  r.soil_raw = {true, 4095};
+  r.climate_sensor = ClimateKind::Sht31;
+  // MqttLink::payload_ is char[320].
+  char out[320];
+  TEST_ASSERT_GREATER_THAN(0, buildTelemetryJson(r, m, out, sizeof(out)));
+}
+
 static void test_returns_zero_when_buffer_too_small() {
   std::string full = build(exampleReading(), exampleMeta());
   char out[512];
@@ -216,10 +270,14 @@ int main(int, char**) {
   RUN_TEST(test_example_matches_contract_fixture);
   RUN_TEST(test_exact_key_set_and_no_soil_pct);
   RUN_TEST(test_rssi_omitted_when_not_ok);
+  RUN_TEST(test_climate_sensor_names);
+  RUN_TEST(test_climate_sensor_omitted_when_none_found);
+  RUN_TEST(test_climate_sensor_kept_when_reading_fails);
   RUN_TEST(test_failed_fields_are_null);
   RUN_TEST(test_non_finite_values_are_null_even_when_ok);
   RUN_TEST(test_decimal_places);
   RUN_TEST(test_integer_fields_full_range);
+  RUN_TEST(test_longest_realistic_payload_fits_mqtt_buffer);
   RUN_TEST(test_returns_zero_when_buffer_too_small);
   RUN_TEST(test_null_meta_strings_rejected);
   RUN_TEST(test_strings_are_escaped);

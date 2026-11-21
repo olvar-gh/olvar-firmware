@@ -12,7 +12,7 @@ namespace olvar {
 
 class ClimateSensor {
  public:
-  enum class Kind : uint8_t { None, Sht31, Dht11 };
+  using Kind = ClimateKind;
 
   explicit ClimateSensor(I2cBus& bus);
 

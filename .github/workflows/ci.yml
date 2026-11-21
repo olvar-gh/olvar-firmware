@@ -26,6 +26,17 @@ jobs:
       - name: No em dashes (project rule)
         run: |
           ! git grep -n "$(printf '\342\200\224')"
+      - name: Contract fixture matches the schema
+        run: |
+          pip install jsonschema==4.23.0
+          python - <<'EOF'
+          import json, jsonschema
+          schema = json.load(open("docs/contract/telemetry.schema.json"))
+          jsonschema.Draft202012Validator.check_schema(schema)
+          jsonschema.Draft202012Validator(schema).validate(json.load(open("docs/contract/telemetry.example.json")))
+          EOF
+      - name: Simulator script parses
+        run: bash -n tools/sim_telemetry.sh
       - name: Native tests
         run: pio test -e native
       - name: Firmware build

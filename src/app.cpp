@@ -179,6 +179,8 @@ Reading App::readSensors() {
   r.humidity_pct = th.humidity_pct;
   r.lux = bh_.read();
   r.soil_raw = soil_.sampleRaw();
+  // After readPrepared(), which may only now have found the sensor.
+  r.climate_sensor = climate_.kind();
   return r;
 }
 
